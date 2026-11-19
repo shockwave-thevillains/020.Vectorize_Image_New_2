@@ -364,7 +364,7 @@ function glowEPS(res, opt, kx, ky, OH, hidden, colorOf) {
 
 // Lebar garis pengisi celah dalam px output: minimal opt.gapWidth, ikut membesar
 // pada artboard besar agar tetap menutup celah saat dilihat diperkecil.
-const gapWidthFor = (opt, OW, res) => Math.max(opt.gapWidth || 1, ((opt.gapScale ?? 2.5) * OW) / res.srcW);
+const gapWidthFor = (opt, OW, res) => Math.max(opt.gapWidth || 1, (2.5 * OW) / res.srcW);
 
 export function buildSVG(res, opt) {
   const { w: OW, h: OH } = opt.size;

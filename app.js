@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611191600';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611191100';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -34,7 +34,6 @@ const DEFAULTS = {
   code: '',
   start: 1,
   format: 'both',
-  fidelity: 'clean', // Kemiripan (mode Warna): clean (bawaan, gaya lama) | balanced | high
 };
 // Bawaan yang berbeda per mode: DEFAULTS memakai nilai mode Warna (mode bawaan);
 // mode Gradien memakai latar Tanpa; mode Siluet latar putih; kepekaan warna 10.
@@ -46,17 +45,7 @@ const modeDefault = (mode, k) => (MODE_DEFAULTS[mode] && k in MODE_DEFAULTS[mode
 function applyModeDefaults(prev, next) {
   for (const k of Object.keys(OTHER_DEFAULTS)) if (S[k] === modeDefault(prev, k)) S[k] = modeDefault(next, k);
 }
-const PROC = ['fidelity', 'bgKey', 'keyTol', 'mode', 'gradColors', 'lineStrokes', 'glowRings', 'arcSnap', 'clean', 'rough', 'straighten', 'polyFit', 'simplify', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
-// Kemiripan (mode Warna). 'clean' = jalur lama (Rapikan, palet bertahap). 'balanced'/'high' =
-// palet k-means adaptif atas semua piksel + tepi tidak diratakan: lebih setia ke gambar asli.
-// Hasil uji (galat rata-rata RGB vs gambar asli; Bersih → Tinggi): 6,2→4,2 (ilustrasi besar),
-// 8,8→5,6 (kecil, JPEG), 15,8→9,5 (detail halus). Harganya: lebih banyak bentuk & file lebih besar.
-const FIDELITY = {
-  clean: null,
-  balanced: { kmeans: true, kmTarget: 4.5, kmExtra: 8, clean: false, rough: 1, flow: false, minArea: 6, simplify: 0, shapeCap: 12000 },
-  high: { kmeans: true, kmTarget: 3.2, kmExtra: 16, clean: false, rough: 0, flow: false, minArea: 4, simplify: 0, shapeCap: 30000 },
-};
-const fidOf = () => (S.mode === 'color' ? FIDELITY[S.fidelity] || null : null);
+const PROC = ['bgKey', 'keyTol', 'mode', 'gradColors', 'lineStrokes', 'glowRings', 'arcSnap', 'clean', 'rough', 'straighten', 'polyFit', 'simplify', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
 const MAX_WORK = 4096 * 4096;
 const GAP_WIDTH = 1.5; // px output
 
@@ -128,9 +117,6 @@ function procOpts() {
     whiteMode: S.whiteMode,
     whiteTol: S.whiteTol,
     maxWorkPixels: MAX_WORK,
-    // Kemiripan Seimbang/Tinggi menimpa Rapikan, tepi kasar, buang bintik, dsb.
-    ...(fidOf() || {}),
-    ...(fidOf() && !S.colorAuto ? { kmMax: Math.max(8, S.maxColors) } : {}),
   };
 }
 const keyOf = (it) => JSON.stringify(procOpts());
@@ -221,7 +207,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611191600');
+  const w = new Worker('worker.js?v=202611191100');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -241,7 +227,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611191600', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611191100', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
@@ -383,7 +369,7 @@ function cancelItem(it) {
 // Ukuran berkas SVG sebenarnya (sesuai pengaturan unduh), dihitung setelah hasil tampil
 // agar tidak menahan layar. Disimpan per gambar + suntingan.
 const sizeTimers = new Map();
-function sizeKey(it) { return `${visKey(it)}|${JSON.stringify(it.recolor)}|${S.size}|${S.customMP}|${S.stacking}|${S.gapFill}|${S.fidelity}`; }
+function sizeKey(it) { return `${visKey(it)}|${JSON.stringify(it.recolor)}|${S.size}|${S.customMP}|${S.stacking}|${S.gapFill}`; }
 function scheduleSize(it) {
   if (it.sizeKey === sizeKey(it)) return;
   clearTimeout(sizeTimers.get(it.id));
@@ -1344,8 +1330,7 @@ function syncControls() {
   $('#stackNote').textContent = S.stacking === 'stacked'
     ? 'Bentuk ditumpuk dari belakang ke depan — tanpa retak di bentuk bersarang, mudah diedit.'
     : 'Bentuk saling memotong tanpa tumpang tindih — cocok untuk cutting plotter dan sablon.';
-  const keys = [S.mode, `${S.mode}:${S.silTones}`, `${S.mode}:fid-${S.fidelity}`];
-  $('#fidNote').textContent = { clean: 'Gaya lama: bentuk dirapikan & disederhanakan; file ringan.', balanced: 'Lebih setia ke gambar asli dengan file sedang.', high: 'Semirip mungkin dengan gambar asli (tepi lunak tidak diratakan). Bentuk lebih banyak, file lebih besar.' }[S.fidelity] || '';
+  const keys = [S.mode, `${S.mode}:${S.silTones}`];
   $$('[data-show], [data-bg]').forEach((el) => {
     const okMode = !el.dataset.show || el.dataset.show.split(' ').some((t) => keys.includes(t));
     const okBg = !el.dataset.bg || el.dataset.bg === S.bgKey;
@@ -1412,7 +1397,6 @@ function exportOpts(it) {
     stacking: S.stacking,
     gapFill: S.gapFill,
     gapWidth: GAP_WIDTH,
-    gapScale: fidOf() ? 1.0 : undefined,
     recolor: it.recolor,
     ...(() => { const ed = editState(it); return { hidden: ed.hidden, regionColor: ed.regionColor, absorbed: ed.absorbed }; })(),
   };

@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; if (localStorage.getItem('vektor.panel') === 'hidden') document.documentElement.classList.add('panel-off'); } catch (e) { /* abaikan */ }</script>
-  <link rel="stylesheet" href="styles.css?v=202611191600">
+  <link rel="stylesheet" href="styles.css?v=202611191100">
 </head>
 <body>
   <div class="gate" id="gate">
@@ -152,15 +152,6 @@
               <button type="button" data-v="gradient">Gradien</button>
             </div>
           </div>
-          <div class="field" data-show="color">
-            <div class="flabel">Kemiripan<span class="help" tabindex="0" role="note" data-tip="Bersih: bentuk disederhanakan, file ringan (gaya lama).&#10;Seimbang: lebih setia ke gambar asli, file sedang.&#10;Tinggi: semirip mungkin dengan gambar asli (palet k-means adaptif, tepi tidak diratakan); bentuk dan file lebih besar." aria-label="Bersih: bentuk disederhanakan, file ringan. Seimbang: lebih setia ke gambar asli. Tinggi: semirip mungkin dengan gambar asli, file lebih besar.">?</span></div>
-            <div class="seg wide" data-opt="fidelity">
-              <button type="button" data-v="clean">Bersih</button>
-              <button type="button" data-v="balanced">Seimbang</button>
-              <button type="button" data-v="high">Tinggi</button>
-            </div>
-            <p class="note" id="fidNote"></p>
-          </div>
           <div class="field" data-show="gradient">
             <label class="flabel" for="gradColors">Jumlah warna<span class="help" tabindex="0" role="note" data-tip="Banyaknya tingkat warna untuk membentuk gradasi.&#10;Kecil: file ringan, gradasi tampak berpita.&#10;Besar: gradasi lebih halus, bentuk lebih banyak." aria-label="Banyaknya tingkat warna untuk membentuk gradasi.&#10;Kecil: file ringan, gradasi tampak berpita.&#10;Besar: gradasi lebih halus, bentuk lebih banyak.">?</span> <output class="mono" for="gradColors"></output></label>
             <input type="range" id="gradColors" data-opt="gradColors" min="16" max="128" step="4">
@@ -201,21 +192,21 @@
               <input class="num mono" id="maxColors" type="number" min="2" max="64" step="1" value="12" aria-label="Jumlah warna maksimum">
             </div>
           </div>
-          <div class="field" data-show="color:fid-clean">
+          <div class="field" data-show="color">
             <label class="flabel" for="colorMerge">Kepekaan warna<span class="help" tabindex="0" role="note" data-tip="Seberapa beda dua warna agar dianggap warna tersendiri (ΔE).&#10;Kecil: lebih banyak nuansa dipisah, bentuk lebih banyak.&#10;Besar: warna mirip digabung, lebih sedikit warna &amp; lebih bersih.&#10;Putih tidak pernah digabung dengan warna lain." aria-label="Seberapa beda dua warna agar dianggap warna tersendiri (ΔE).&#10;Kecil: lebih banyak nuansa dipisah, bentuk lebih banyak.&#10;Besar: warna mirip digabung, lebih sedikit warna &amp; lebih bersih.&#10;Putih tidak pernah digabung dengan warna lain.">?</span> <output class="mono" for="colorMerge"></output></label>
             <input type="range" id="colorMerge" data-opt="colorMerge" min="4" max="30" step="1">
             <div class="scale mono"><span>banyak nuansa</span><span>sedikit warna</span></div>
             <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="clean"><span><b>Rapikan</b><small>Bersihkan derau/tekstur, rapikan batas antar warna yang mirip, dan sederhanakan kurvanya. Outline dan detail kontras tetap tajam.</small></span></label>
             <label class="check" style="margin-top:8px"><input type="checkbox" data-opt="lineStrokes"><span><b>Garis tipis → garis vektor</b><small>Untuk gambar kaya warna/tekstur (≥ 24 warna): garis tipis yang pecah ditambahkan sebagai stroke bertebal seragam.</small></span></label>
           </div>
-          <div class="field" data-show="color:fid-clean">
+          <div class="field" data-show="color">
             <label class="flabel" for="rough">Haluskan tepi kasar<span class="help" tabindex="0" role="note" data-tip="Meratakan tepi bergerigi (gaya kuas kering, derau JPEG).&#10;Kecil / mati: tepi mengikuti gambar apa adanya.&#10;Besar: tepi lebih mulus; garis setipis ≤ 2 px bisa ikut menipis." aria-label="Meratakan tepi bergerigi (gaya kuas kering, derau JPEG).&#10;Kecil / mati: tepi mengikuti gambar apa adanya.&#10;Besar: tepi lebih mulus; garis setipis ≤ 2 px bisa ikut menipis.">?</span> <output class="mono" for="rough"></output></label>
             <input type="range" id="rough" data-opt="rough" min="0" max="4" step="0.5">
             <div class="scale mono"><span>mati (setia ke tepi)</span><span>tepi kuas → mulus</span></div>
             <p class="note">Tepi bergerigi bergaya kuas kering dihaluskan. Turunkan bila ada garis setipis ≤ 2 px yang hilang.</p>
             <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="straighten"><span><b>Luruskan garis panjang</b><small>Tepi yang bergerigi tetapi bila ditarik garis panjang memang lurus dijadikan satu garis lurus. Lengkungan tetap lengkung.</small></span></label>
           </div>
-          <div class="field" data-show="color:fid-clean">
+          <div class="field" data-show="color">
             <div class="flabel">Sederhanakan bayangan<span class="help" tabindex="0" role="note" data-tip="Melebur bercak warna yang batasnya lemah di gambar asli (bayangan lembut, gradasi berpita) ke warna tetangganya. Outline dan batas kontras tidak disentuh.&#10;Mati: semua tingkat bayangan dipertahankan.&#10;Ringan: bercak kecil dilebur — hasil lebih bersih.&#10;Kuat: bercak lebih besar ikut dilebur — paling sedikit bentuk, tetapi sebagian bayangan hilang." aria-label="Melebur bercak warna yang batasnya lemah di gambar asli (bayangan lembut, gradasi berpita) ke warna tetangganya. Outline dan batas kontras tidak disentuh.&#10;Mati: semua tingkat bayangan dipertahankan.&#10;Ringan: bercak kecil dilebur — hasil lebih bersih.&#10;Kuat: bercak lebih besar ikut dilebur — paling sedikit bentuk, tetapi sebagian bayangan hilang.">?</span></div>
             <div class="seg wide" data-opt="simplify">
               <button type="button" data-v="0">Mati</button>
@@ -231,7 +222,7 @@
             <input type="range" id="smooth" data-opt="smooth" min="0.15" max="1.2" step="0.05">
             <div class="scale mono"><span>presisi</span><span>halus</span></div>
           </div>
-          <div class="field" data-show="silhouette gradient color:fid-clean">
+          <div class="field">
             <label class="flabel" for="minArea">Buang bintik &lt;<span class="help" tabindex="0" role="note" data-tip="Bentuk yang lebih kecil dari luas ini dilebur ke warna di sekitarnya.&#10;Kecil: detail kecil (titik, bintang) dipertahankan.&#10;Besar: hasil lebih bersih, tetapi detail kecil bisa hilang." aria-label="Bentuk yang lebih kecil dari luas ini dilebur ke warna di sekitarnya.&#10;Kecil: detail kecil (titik, bintang) dipertahankan.&#10;Besar: hasil lebih bersih, tetapi detail kecil bisa hilang.">?</span> <output class="mono" for="minArea"></output></label>
             <input type="range" id="minArea" data-opt="minArea" min="0" max="80" step="1">
           </div>
@@ -344,6 +335,6 @@
   <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
   <input type="color" id="colorPick" hidden>
 
-  <script type="module" src="gate.js?v=202611191600"></script>
+  <script type="module" src="gate.js?v=202611191100"></script>
 </body>
 </html>

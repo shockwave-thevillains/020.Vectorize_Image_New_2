@@ -59,9 +59,7 @@ window.bench = async (img, opts) => {
   const res = await vectorize(blob, o, () => {});
   const ms = performance.now() - t0;
   const W = res.srcW, H = res.srcH;
-  // _mp: ukuran output (megapiksel) seperti unduhan sungguhan; gambar lalu diturunkan ke ukuran sumber untuk dibandingkan.
-  const mk = opts._mp ? Math.sqrt(opts._mp * 1e6 / (W * H)) : 1;
-  const svg = buildSVG(res, { size: { w: Math.round(W * mk), h: Math.round(H * mk) }, stacking: opts._stacking || 'stacked', gapFill: opts._gapFill ?? true, gapWidth: 1.5, gapScale: opts._gapScale, hidden: defaultHidden(res) });
+  const svg = buildSVG(res, { size: { w: W, h: H }, stacking: 'stacked', gapFill: true, gapWidth: 1.5, hidden: defaultHidden(res) });
   const bg = o.bgKey === 'magenta' ? '#ff00ff' : o.bgKey === 'white' ? '#ffffff' : null;
   const draw = async (src, isSvg) => {
     const c = new OffscreenCanvas(W, H), g = c.getContext('2d');
@@ -85,7 +83,7 @@ window.bench = async (img, opts) => {
   }
   const vis = defaultHidden(res).reduce((n, h) => n + (h ? 0 : 1), 0);
   const w = wiggle(res);
-  return { err: +(sum / (W * H * 3)).toFixed(2), edgeErr: +(eSum / Math.max(1, eN) / 3).toFixed(2), bad: +(100 * bad / (W * H)).toFixed(3), colors: res.palette.length, shapes: vis, nodes: res.nodes, turn100: +w.turn100.toFixed(1), infl100: +w.infl100.toFixed(2), sec: +(ms / 1000).toFixed(1), kb: Math.round(svg.length / 1024), svg };
+  return { err: +(sum / (W * H * 3)).toFixed(2), edgeErr: +(eSum / Math.max(1, eN) / 3).toFixed(2), bad: +(100 * bad / (W * H)).toFixed(3), colors: res.palette.length, shapes: vis, nodes: res.nodes, turn100: +w.turn100.toFixed(1), infl100: +w.infl100.toFixed(2), sec: +(ms / 1000).toFixed(1), svg };
 };
 window.ready = true;
 </script>
