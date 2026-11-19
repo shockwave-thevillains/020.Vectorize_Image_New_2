@@ -140,7 +140,7 @@ async function vectorize(file, o, progress, aiMask) {
   }
   const pal = binary
     ? [{ r: 0, g: 0, b: 0, L: 0, A: 0, B: 0, n: 2 }, { r: 255, g: 255, b: 255, L: 100, A: 0, B: 0, n: 1 }]
-    : buildPalette(src, sw, sh, o);
+    : o.kmeans && o.mode === 'color' ? buildPaletteKMeans(src, sw, sh, o) : buildPalette(src, sw, sh, o);
   // Siluet bernada: warna output = rata-rata warna asli piksel dengan tingkat abu-abu itu.
   if (orig) {
     for (const p of pal) {
@@ -258,6 +258,18 @@ async function vectorize(file, o, progress, aiMask) {
     // Hanya di antara warna yang mirip: garis tipis berkontras (outline) tidak terkikis.
     majorityFilter(lab, W, H, Math.max(1, Math.round(o.rough * s)), 2, pal, 20);
     despeckle(lab, W, H, Math.max(minA, Math.round((o.rough * s) ** 2 * 3)), comp, order, pal, { de: 22, min: Math.max(2, Math.round(3 * s * s)) });
+  }
+  // Batas kompleksitas (Kemiripan Seimbang/Tinggi): gambar sangat detail bisa menghasilkan
+  // ratusan ribu bentuk. Bila jumlah bentuk melampaui o.shapeCap, bentuk terkecil dilebur
+  // ke tetangga yang paling mirip secara bertahap (ambang luas dinaikkan 2,5× tiap putaran).
+  if (o.shapeCap) {
+    let ma = minA;
+    for (let t = 0; t < 5; t++) {
+      const inf = label(lab, W, H, comp, order);
+      if (inf.count <= o.shapeCap) break;
+      ma = Math.round(ma * 2.5);
+      despeckle(lab, W, H, ma, comp, order, pal, null);
+    }
   }
   progress(0.45, 'bersih');
 
@@ -1175,6 +1187,137 @@ function chromaKey(px, w, h, key, tol) {
 }
 
 // ---------------------------------------------------------------- palet
+// Palet k-means berbobot di ruang Lab (seperti yang lazim di Python/OpenCV/sklearn),
+// memakai SEMUA piksel (termasuk warna peralihan tepi) lewat histogram 5 bit/kanal.
+// Jumlah warna K dipilih otomatis: dinaikkan (24 → 32 → 48 → 64 → 96 → 128) sampai
+// galat rata-rata ΔE ≤ o.kmTarget atau mencapai o.kmMax. Inisialisasi: median-cut
+// berbobot pada Lab, dilanjutkan iterasi Lloyd. Warna dasar putih/hitam bersih
+// dipertahankan bila ada di gambar.
+function buildPaletteKMeans(px, w, h, o) {
+  const cnt = new Float64Array(32768), sr = new Float64Array(32768), sg = new Float64Array(32768), sb = new Float64Array(32768);
+  let all = 0;
+  for (let i = 0, p = 0; i < w * h; i++, p += 4) {
+    const a = px[p + 3];
+    if (a < 128) continue;
+    let r = px[p], g = px[p + 1], b = px[p + 2];
+    if (a < 255 && o.bgKey !== 'magenta') {
+      const k = a / 255;
+      r = Math.round(r * k + 255 * (1 - k)); g = Math.round(g * k + 255 * (1 - k)); b = Math.round(b * k + 255 * (1 - k));
+    }
+    const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+    cnt[key]++; sr[key] += r; sg[key] += g; sb[key] += b; all++;
+  }
+  if (!all) return [{ r: 255, g: 255, b: 255, L: 100, A: 0, B: 0, n: 1 }];
+  const bins = [];
+  for (let k = 0; k < 32768; k++) if (cnt[k] > 0) bins.push(k);
+  const M = bins.length;
+  const L = new Float32Array(M), A = new Float32Array(M), B = new Float32Array(M), n = new Float64Array(M);
+  const tl = new Float32Array(3);
+  for (let m = 0; m < M; m++) {
+    const k = bins[m];
+    rgb2lab(Math.round(sr[k] / cnt[k]), Math.round(sg[k] / cnt[k]), Math.round(sb[k] / cnt[k]), tl);
+    L[m] = tl[0]; A[m] = tl[1]; B[m] = tl[2]; n[m] = cnt[k];
+  }
+  const target = o.kmTarget ?? 2.2, kmax = Math.max(8, Math.min(240, o.kmMax ?? 128));
+
+  // Median-cut berbobot → K pusat awal.
+  const medianCut = (K) => {
+    let boxes = [Array.from({ length: M }, (_, i) => i)];
+    while (boxes.length < K) {
+      // Pilih kotak dengan SSE terbesar.
+      let bi = -1, bs = -1, bAxis = 0;
+      for (let q = 0; q < boxes.length; q++) {
+        const bx = boxes[q];
+        if (bx.length < 2) continue;
+        let w0 = 0, m0 = 0, m1 = 0, m2 = 0;
+        for (const i of bx) { w0 += n[i]; m0 += n[i] * L[i]; m1 += n[i] * A[i]; m2 += n[i] * B[i]; }
+        m0 /= w0; m1 /= w0; m2 /= w0;
+        let v0 = 0, v1 = 0, v2 = 0;
+        for (const i of bx) { v0 += n[i] * (L[i] - m0) ** 2; v1 += n[i] * (A[i] - m1) ** 2; v2 += n[i] * (B[i] - m2) ** 2; }
+        const sse = v0 + v1 + v2;
+        if (sse > bs) { bs = sse; bi = q; bAxis = v0 >= v1 && v0 >= v2 ? 0 : v1 >= v2 ? 1 : 2; }
+      }
+      if (bi < 0) break;
+      const bx = boxes[bi], ch = bAxis === 0 ? L : bAxis === 1 ? A : B;
+      bx.sort((p, q) => ch[p] - ch[q]);
+      let tot = 0;
+      for (const i of bx) tot += n[i];
+      let acc = 0, cut = 1;
+      for (let t = 0; t < bx.length - 1; t++) { acc += n[bx[t]]; if (acc >= tot / 2) { cut = t + 1; break; } cut = t + 1; }
+      boxes.splice(bi, 1, bx.slice(0, cut), bx.slice(cut));
+    }
+    return boxes.map((bx) => {
+      let w0 = 0, a0 = 0, a1 = 0, a2 = 0;
+      for (const i of bx) { w0 += n[i]; a0 += n[i] * L[i]; a1 += n[i] * A[i]; a2 += n[i] * B[i]; }
+      return [a0 / w0, a1 / w0, a2 / w0];
+    });
+  };
+  const lloyd = (C, iters) => {
+    const K = C.length, asg = new Int32Array(M);
+    let err = 0;
+    for (let it = 0; it <= iters; it++) {
+      const s0 = new Float64Array(K), s1 = new Float64Array(K), s2 = new Float64Array(K), sw = new Float64Array(K);
+      err = 0;
+      for (let m = 0; m < M; m++) {
+        let best = 0, bd = Infinity;
+        for (let c = 0; c < K; c++) {
+          const d = (C[c][0] - L[m]) ** 2 + (C[c][1] - A[m]) ** 2 + (C[c][2] - B[m]) ** 2;
+          if (d < bd) { bd = d; best = c; }
+        }
+        asg[m] = best; err += n[m] * Math.sqrt(bd);
+        s0[best] += n[m] * L[m]; s1[best] += n[m] * A[m]; s2[best] += n[m] * B[m]; sw[best] += n[m];
+      }
+      if (it === iters) break;
+      for (let c = 0; c < K; c++) if (sw[c] > 0) C[c] = [s0[c] / sw[c], s1[c] / sw[c], s2[c] / sw[c]];
+    }
+    return { C, asg, err: err / all };
+  };
+
+  let res = null;
+  for (const K of [16, 24, 32, 48, 64, 96, 128, 160, 200, 240]) {
+    if (K > kmax && res) break;
+    res = lloyd(medianCut(Math.min(K, M)), 6);
+    if (res.err <= target || K >= kmax || K >= M) break;
+  }
+  // Penambahan warna berbasis residu: warna kecil tapi sangat kontras (garis outline
+  // hitam tipis, kilau, titik) hampir tidak menggeser rata-rata galat sehingga lolos
+  // dari K di atas. Warna bin dengan massa galat kuadrat terbesar ditambahkan satu per
+  // satu (greedy), lalu semua pusat dihaluskan lagi dengan Lloyd.
+  const extra = Math.min(o.kmExtra ?? 24, 250 - res.C.length);
+  if (extra > 0) {
+    const C = res.C.slice();
+    const d2 = new Float64Array(M).fill(Infinity);
+    const upd = (c) => { for (let m = 0; m < M; m++) { const d = (c[0] - L[m]) ** 2 + (c[1] - A[m]) ** 2 + (c[2] - B[m]) ** 2; if (d < d2[m]) d2[m] = d; } };
+    for (const c of C) upd(c);
+    let total = 0;
+    for (let m = 0; m < M; m++) total += n[m] * d2[m];
+    for (let e = 0; e < extra; e++) {
+      let bm = -1, bs = 0;
+      for (let m = 0; m < M; m++) { const sc = n[m] * d2[m]; if (sc > bs) { bs = sc; bm = m; } }
+      if (bm < 0 || bs < total * 0.0006) break;
+      const c = [L[bm], A[bm], B[bm]];
+      C.push(c); upd(c);
+    }
+    if (C.length > res.C.length) res = lloyd(C, 4);
+  }
+  // Pusat → RGB rata-rata asli per klaster (lebih akurat daripada konversi balik Lab).
+  const K = res.C.length;
+  const acc = Array.from({ length: K }, () => ({ n: 0, r: 0, g: 0, b: 0 }));
+  for (let m = 0; m < M; m++) {
+    const c = acc[res.asg[m]], k = bins[m];
+    c.n += cnt[k]; c.r += sr[k]; c.g += sg[k]; c.b += sb[k];
+  }
+  const out = [];
+  for (const c of acc) {
+    if (!c.n) continue;
+    const r = Math.round(c.r / c.n), g = Math.round(c.g / c.n), b = Math.round(c.b / c.n);
+    rgb2lab(r, g, b, tl);
+    out.push({ r, g, b, L: tl[0], A: tl[1], B: tl[2], n: c.n });
+  }
+  out.sort((p, q) => q.n - p.n);
+  return out;
+}
+
 function buildPalette(px, w, h, o) {
   const cnt = new Float64Array(32768);
   const sr = new Float64Array(32768), sg = new Float64Array(32768), sb = new Float64Array(32768);
