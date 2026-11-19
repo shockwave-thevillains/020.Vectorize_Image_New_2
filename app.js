@@ -1,4 +1,4 @@
-import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611191500';
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611191600';
 
 // ---------------------------------------------------------------- pengaturan
 const DEFAULTS = {
@@ -34,7 +34,7 @@ const DEFAULTS = {
   code: '',
   start: 1,
   format: 'both',
-  fidelity: 'high', // Kemiripan (mode Warna): clean | balanced | high
+  fidelity: 'clean', // Kemiripan (mode Warna): clean (bawaan, gaya lama) | balanced | high
 };
 // Bawaan yang berbeda per mode: DEFAULTS memakai nilai mode Warna (mode bawaan);
 // mode Gradien memakai latar Tanpa; mode Siluet latar putih; kepekaan warna 10.
@@ -221,7 +221,7 @@ function removeItem(id) {
 const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
 const workers = [];
 function spawn(slot) {
-  const w = new Worker('worker.js?v=202611191500');
+  const w = new Worker('worker.js?v=202611191600');
   const wk = { w, job: null };
   w.onmessage = (e) => onWorker(wk, e.data);
   w.onerror = (e) => {
@@ -241,7 +241,7 @@ const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === '
 let aiWorker = null, aiJob = null, aiState = '';
 function aiStart() {
   if (aiWorker) return;
-  aiWorker = new Worker('ai-worker.js?v=202611191500', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=202611191600', { type: 'module' });
   aiWorker.onmessage = (e) => {
     const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
     if (m.type === 'progress') {
