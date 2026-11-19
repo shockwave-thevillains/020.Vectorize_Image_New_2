@@ -1,0 +1,1500 @@
+import { outputSize, stemOf, outName, buildSVG, buildEPS, previewMarkup, outlineMarkup, regionPath, defaultHidden, hex, makeZip, saveBlob } from './export.js?v=202611191100';
+
+// ---------------------------------------------------------------- pengaturan
+const DEFAULTS = {
+  mode: 'color',
+  gradColors: 64,
+  lineStrokes: true,
+  glowRings: true,
+  arcSnap: true,
+  clean: true,
+  rough: 2,
+  straighten: true,
+  polyFit: true,
+  simplify: 0,
+  silTones: 'gray',
+  silThreshold: 128,
+  cavity: 'white',
+  upscale: 4,
+  colorAuto: 1,
+  maxColors: 12,
+  colorMerge: 17,
+  smooth: 0.8,
+  minArea: 6,
+  corner: 70,
+  bgKey: 'magenta',
+  keyTol: 30,
+  whiteMode: 'outer',
+  whiteTol: 10,
+  learn: true,
+  size: '15',
+  customMP: 15,
+  stacking: 'stacked',
+  gapFill: true,
+  code: '',
+  start: 1,
+  format: 'both',
+};
+// Bawaan yang berbeda per mode: DEFAULTS memakai nilai mode Warna (mode bawaan);
+// mode Gradien memakai latar Tanpa; mode Siluet latar putih; kepekaan warna 10.
+const MODE_DEFAULTS = { color: { bgKey: 'magenta', colorMerge: 17 }, gradient: { bgKey: 'none' } };
+const OTHER_DEFAULTS = { bgKey: 'white', colorMerge: 10 };
+const modeDefault = (mode, k) => (MODE_DEFAULTS[mode] && k in MODE_DEFAULTS[mode] ? MODE_DEFAULTS[mode][k] : OTHER_DEFAULTS[k]);
+// Ganti mode: pengaturan yang masih bernilai bawaan mode lama ikut ke bawaan mode
+// baru; yang sudah diubah pengguna dibiarkan.
+function applyModeDefaults(prev, next) {
+  for (const k of Object.keys(OTHER_DEFAULTS)) if (S[k] === modeDefault(prev, k)) S[k] = modeDefault(next, k);
+}
+const PROC = ['bgKey', 'keyTol', 'mode', 'gradColors', 'lineStrokes', 'glowRings', 'arcSnap', 'clean', 'rough', 'straighten', 'polyFit', 'simplify', 'silTones', 'silThreshold', 'cavity', 'upscale', 'colorAuto', 'maxColors', 'colorMerge', 'smooth', 'minArea', 'corner', 'whiteMode', 'whiteTol'];
+const MAX_WORK = 4096 * 4096;
+const GAP_WIDTH = 1.5; // px output
+
+const S = { ...DEFAULTS, ...loadSettings() };
+function loadSettings() {
+  try {
+    const v4 = localStorage.getItem('vektor.settings.v4');
+    if (v4) {
+      const st = JSON.parse(v4);
+      // Sekali: bawaan lama mode Warna (latar putih, kepekaan 10) → bawaan baru.
+      const rev = Number(localStorage.getItem('vektor.defaults.rev')) || 0;
+      if (rev < 3) {
+        localStorage.setItem('vektor.defaults.rev', '3');
+        if (rev < 2 && (st.mode || 'color') === 'color') {
+          if (st.bgKey === 'white') st.bgKey = 'magenta';
+          if (st.colorMerge === 10) st.colorMerge = 17;
+        }
+        // Mode Gradien: bawaan latar lama (putih) → Tanpa.
+        if (st.mode === 'gradient' && st.bgKey === 'white') st.bgKey = 'none';
+        localStorage.setItem('vektor.settings.v4', JSON.stringify(st));
+      }
+      return st;
+    }
+    // Pindah dari v3: pertahankan pengaturan lain, tapi latar putih kembali ke bawaan baru.
+    const old = JSON.parse(localStorage.getItem('vektor.settings.v3') || '{}');
+    delete old.whiteMode; delete old.cavity;
+    return old;
+  } catch { return {}; }
+}
+function saveSettings() {
+  try { localStorage.setItem('vektor.settings.v4', JSON.stringify(S)); } catch { /* mode privat */ }
+}
+
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const fmtInt = (n) => n.toLocaleString('id-ID');
+const fmtMP = (w, h) => (w * h / 1e6).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ---------------------------------------------------------------- antrean
+const items = [];
+let selId = null;
+let seq = 0;
+
+function procOpts() {
+  return {
+    bgKey: S.bgKey === 'magenta' || S.bgKey === 'none' ? S.bgKey : null, // 'none' = tidak ada yang dihapus
+    keyTol: S.keyTol,
+    mode: S.mode,
+    gradColors: S.gradColors,
+    lineStrokes: S.lineStrokes,
+    glowRings: S.glowRings,
+    arcSnap: S.arcSnap,
+    clean: S.clean,
+    rough: S.rough,
+    straighten: S.mode === 'color' && !!S.straighten,
+    // Mesin kurva baru (poligon minimal + tepi sub-piksel): Warna & Siluet.
+    polyFit: S.mode !== 'gradient' && !!S.polyFit,
+    subpixel: S.mode !== 'gradient' && !!S.polyFit,
+    simplify: S.mode === 'color' ? S.simplify : 0,
+    silTones: S.silTones,
+    silThreshold: S.silThreshold,
+    cavity: S.cavity,
+    upscale: S.upscale,
+    maxColors: S.colorAuto ? 0 : S.maxColors,
+    colorMerge: S.colorMerge,
+    smooth: S.smooth,
+    minArea: S.minArea,
+    corner: S.corner,
+    whiteMode: S.whiteMode,
+    whiteTol: S.whiteTol,
+    maxWorkPixels: MAX_WORK,
+  };
+}
+const keyOf = (it) => JSON.stringify(procOpts());
+const isCurrent = (it) => it.result && it.key === keyOf(it);
+
+function statusOf(it) {
+  if (it.inflight) return 'working';
+  if (it.aiBusy) return 'ai';
+  if (it.error && it.errKey === keyOf(it)) return 'error';
+  if (isCurrent(it)) return 'done';
+  if (it.want) return 'queued';
+  return it.result ? 'stale' : 'idle';
+}
+// Gambar yang belum diproses / perlu diproses ulang dengan pengaturan sekarang.
+const needsWork = (it) => !it.inflight && !isCurrent(it) && !(it.error && it.errKey === keyOf(it));
+
+// Tombol Proses: antrekan semua gambar yang belum sesuai pengaturan sekarang.
+function processAll() {
+  for (const it of items) if (needsWork(it)) it.want = true;
+  schedule();
+  items.forEach(updateRow);
+  renderBusy();
+}
+
+async function addFiles(fileList) {
+  const files = [...fileList].filter((f) => f.type.startsWith('image/') || /\.(png|jpe?g|webp|bmp|gif)$/i.test(f.name));
+  if (!files.length) return;
+  for (const file of files) {
+    const it = {
+      id: ++seq,
+      file,
+      name: file.name || `gambar-${seq}.png`,
+      stem: stemOf(file.name || `gambar-${seq}`),
+      url: URL.createObjectURL(file),
+      srcW: 0,
+      srcH: 0,
+      result: null,
+      key: null,
+      inflight: null,
+      progress: 0,
+      error: null,
+      errKey: null,
+      want: false, // diantrekan lewat tombol Proses
+      hide: new Set(), // indeks palet yang disembunyikan
+      toggles: [], // titik klik [x, y] (koordinat sumber); tiap klik membalik region di titik itu
+      redo: [],
+      recolor: {},
+      outline: null,
+      paths: new Map(),
+      aiMask: null, // peta objek/latar dari AI (1024², sekali per gambar)
+      aiBusy: false,
+    };
+    items.push(it);
+    createRow(it);
+    probeSize(it);
+  }
+  if (selId == null) select(items[0].id);
+  refreshAll();
+}
+
+function probeSize(it) {
+  const img = new Image();
+  img.onload = () => {
+    it.srcW = img.naturalWidth;
+    it.srcH = img.naturalHeight;
+    updateRow(it);
+    if (it.id === selId) { refreshSize(); if (!V.fitted) fit(); }
+  };
+  img.src = it.url;
+}
+
+function removeItem(id) {
+  const i = items.findIndex((x) => x.id === id);
+  if (i < 0) return;
+  const it = items[i];
+  URL.revokeObjectURL(it.url);
+  items.splice(i, 1);
+  clearTimeout(thumbTimers.get(id)); thumbTimers.delete(id);
+  const tu = rowEls.get(id)?.querySelector('.rthumb img')?.dataset.url;
+  if (tu) URL.revokeObjectURL(tu);
+  rowEls.get(id)?.remove();
+  rowEls.delete(id);
+  if (selId === id) select(items[Math.min(i, items.length - 1)]?.id ?? null);
+  refreshAll();
+}
+
+// ---------------------------------------------------------------- worker pool
+const POOL = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1, navigator.deviceMemory && navigator.deviceMemory < 4 ? 1 : 2));
+const workers = [];
+function spawn(slot) {
+  const w = new Worker('worker.js?v=202611191100');
+  const wk = { w, job: null };
+  w.onmessage = (e) => onWorker(wk, e.data);
+  w.onerror = (e) => {
+    e.preventDefault?.();
+    const job = wk.job;
+    wk.w.terminate();
+    workers[slot] = spawn(slot);
+    if (job) failJob(job, 'Proses gagal (kemungkinan memori habis). Coba upscale lebih kecil.');
+    schedule();
+  };
+  return wk;
+}
+for (let i = 0; i < POOL; i++) workers.push(spawn(i));
+
+// ---------------------------------------------------------------- AI (opsional)
+const needAI = () => S.mode === 'color' && S.whiteMode === 'ai' && S.bgKey === 'white';
+let aiWorker = null, aiJob = null, aiState = '';
+function aiStart() {
+  if (aiWorker) return;
+  aiWorker = new Worker('ai-worker.js?v=202611191100', { type: 'module' });
+  aiWorker.onmessage = (e) => {
+    const m = e.data, it = aiJob && items.find((x) => x.id === m.id);
+    if (m.type === 'progress') {
+      aiState = m.stage === 'download' ? `Mengunduh model AI (sekali saja) ${(m.got / 1e6).toFixed(0)}/${(m.total / 1e6).toFixed(0)} MB`
+        : m.stage === 'init' ? 'Menyiapkan model AI…' : 'AI menganalisis objek & latar…';
+      if (it) updateRow(it);
+      renderBusy();
+      return;
+    }
+    aiJob = null;
+    aiState = '';
+    if (it) {
+      it.aiBusy = false;
+      if (m.type === 'done') it.aiMask = m.mask;
+      else { it.want = false; it.error = `AI gagal: ${m.message}`; it.errKey = keyOf(it); }
+      updateRow(it);
+    }
+    renderBusy();
+    schedule();
+  };
+  aiWorker.onerror = (e) => {
+    e.preventDefault?.();
+    const it = aiJob && items.find((x) => x.id === aiJob);
+    aiWorker.terminate(); aiWorker = null; aiJob = null; aiState = '';
+    if (it) { it.aiBusy = false; it.want = false; it.error = 'AI tidak bisa dijalankan di browser ini.'; it.errKey = keyOf(it); updateRow(it); }
+    schedule();
+  };
+}
+function aiSchedule() {
+  if (!needAI() || aiJob) return;
+  const sel = items.find((x) => x.id === selId);
+  const cand = (it) => it.want && needsWork(it) && !it.aiMask && !it.aiBusy;
+  const it = sel && cand(sel) ? sel : items.find(cand);
+  if (!it) return;
+  aiStart();
+  aiJob = it.id;
+  it.aiBusy = true;
+  updateRow(it);
+  aiWorker.postMessage({ id: it.id, file: it.file });
+}
+
+function nextItem() {
+  const want = (it) => it.want && needsWork(it) && (!needAI() || it.aiMask);
+  const sel = items.find((x) => x.id === selId);
+  if (sel && want(sel)) return sel;
+  return items.find(want);
+}
+
+function schedule() {
+  for (const wk of workers) {
+    if (wk.job) continue;
+    const it = nextItem();
+    if (!it) break;
+    const key = keyOf(it);
+    it.inflight = key;
+    it.want = false;
+    it.progress = 0;
+    it.step = 0;
+    wk.job = { id: it.id, key };
+    const msg = { id: it.id, file: it.file, opts: procOpts() };
+    if (needAI() && it.aiMask) msg.aiMask = it.aiMask.slice();
+    wk.w.postMessage(msg);
+    updateRow(it);
+    if (it.id === selId) renderBusy();
+  }
+  aiSchedule();
+  refreshStatus();
+}
+
+function failJob(job, msg) {
+  const it = items.find((x) => x.id === job.id);
+  if (!it) return;
+  it.inflight = null;
+  it.error = msg;
+  it.errKey = job.key;
+  updateRow(it);
+  if (it.id === selId) renderViewer();
+  notifyWaiters();
+}
+
+function onWorker(wk, msg) {
+  const job = wk.job;
+  const it = job && items.find((x) => x.id === msg.id);
+  if (msg.type === 'progress') {
+    if (it) { it.progress = msg.p; it.step = Math.max(it.step || 0, stepOfProgress(msg.p)); updateRow(it); if (it.id === selId) renderBusy(); }
+    return;
+  }
+  wk.job = null;
+  if (!it) { schedule(); return; }
+  if (msg.type === 'error') {
+    failJob(job, msg.message);
+  } else {
+    const prev = it.result;
+    it.inflight = null;
+    it.error = null;
+    it.result = msg.result;
+    it.key = job.key;
+    it.outline = null;
+    it.paths = new Map();
+    it.adj = null;
+    predictItem(it);
+    if (prev) remapOverrides(it, prev.palette, msg.result.palette);
+    updateRow(it);
+    if (it.id === selId) { renderViewer(); refreshSize(); }
+    scheduleSize(it);
+  }
+  notifyWaiters();
+  schedule();
+}
+
+// ---------------------------------------------------------------- alur proses (ala video)
+// Menyiapkan gambar → Membaca warna → Menelusuri tepi bentuk → Merapikan dan menyusun
+// berkas. Langkah dipetakan dari kemajuan nyata worker (bukan animasi palsu).
+const STEPS = ['Menyiapkan gambar', 'Membaca warna', 'Menelusuri tepi bentuk', 'Merapikan dan menyusun berkas'];
+function stepOfProgress(p) { return p < 0.15 ? 0 : p < 0.45 ? 1 : p < 0.72 ? 2 : 3; }
+
+// Batalkan proses gambar terpilih: hentikan worker (atau AI) yang sedang mengerjakannya.
+function cancelItem(it) {
+  if (!it) return;
+  const i = workers.findIndex((wk) => wk.job && wk.job.id === it.id);
+  if (i >= 0) {
+    const wk = workers[i];
+    wk.w.onerror = null; wk.w.onmessage = null;
+    wk.w.terminate();
+    workers[i] = spawn(i);
+  }
+  if (aiJob === it.id && aiWorker) {
+    aiWorker.onerror = null; aiWorker.onmessage = null;
+    aiWorker.terminate(); aiWorker = null; aiJob = null; aiState = '';
+  }
+  it.inflight = null; it.aiBusy = false; it.want = false; it.progress = 0; it.step = 0;
+  updateRow(it);
+  if (it.id === selId) renderViewer();
+  refreshStatus();
+  notifyWaiters();
+  schedule();
+}
+
+// Ukuran berkas SVG sebenarnya (sesuai pengaturan unduh), dihitung setelah hasil tampil
+// agar tidak menahan layar. Disimpan per gambar + suntingan.
+const sizeTimers = new Map();
+function sizeKey(it) { return `${visKey(it)}|${JSON.stringify(it.recolor)}|${S.size}|${S.customMP}|${S.stacking}|${S.gapFill}`; }
+function scheduleSize(it) {
+  if (it.sizeKey === sizeKey(it)) return;
+  clearTimeout(sizeTimers.get(it.id));
+  sizeTimers.set(it.id, setTimeout(() => {
+    sizeTimers.delete(it.id);
+    if (!items.includes(it) || !it.result) return;
+    const k = sizeKey(it);
+    if (it.sizeKey === k) return;
+    try { it.svgBytes = new Blob([buildSVG(it.result, exportOpts(it))]).size; } catch { it.svgBytes = 0; }
+    it.sizeKey = k;
+    if (it.id === selId) renderBusy();
+  }, 60));
+}
+const fmtBytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(2).replace('.', ',')} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+// Bila palet berubah setelah proses ulang, pindahkan pengubahan warna ke indeks baru.
+function remapOverrides(it, oldPal, newPal) {
+  const same = oldPal.length === newPal.length && oldPal.every((c, k) => c.join() === newPal[k].join());
+  if (same) return;
+  const find = (c) => {
+    let best = -1, bd = 40;
+    newPal.forEach((n, k) => {
+      const d = Math.abs(n[0] - c[0]) + Math.abs(n[1] - c[1]) + Math.abs(n[2] - c[2]);
+      if (d < bd) { bd = d; best = k; }
+    });
+    return best;
+  };
+  const rec = {};
+  for (const [k, v] of Object.entries(it.recolor)) { const j = find(oldPal[k]); if (j >= 0) rec[j] = v; }
+  it.recolor = rec;
+  const hid = new Set();
+  for (const k of it.hide) { const j = find(oldPal[k]); if (j >= 0) hid.add(j); }
+  it.hide = hid;
+}
+
+// ---------------------------------------------------------------- belajar dari hasil akhir
+// Saat pengguna mengunduh, keadaan akhir tiap area putih (dihapus / tidak) disimpan
+// bersama sidiknya. Gambar berikutnya: k-tetangga terdekat menebak keputusan;
+// koreksi pengguna (beda dari bawaan) berbobot lebih besar. Hanya di browser ini.
+const LEARN_KEY = 'vektor.learn.v1';
+const LEARN_MAX = 4000;
+let memory = loadMemory();
+function loadMemory() {
+  try { const m = JSON.parse(localStorage.getItem(LEARN_KEY) || '[]'); return Array.isArray(m) ? m : []; } catch { return []; }
+}
+function saveMemory() {
+  try { localStorage.setItem(LEARN_KEY, JSON.stringify(memory)); } catch { /* penyimpanan penuh / privat */ }
+}
+const memId = (it) => `${it.name}|${it.srcW}x${it.srcH}`;
+
+// Catat keadaan akhir satu gambar (menggantikan catatan lama gambar yang sama).
+function remember(it) {
+  if (!S.learn || S.bgKey !== 'white' || !it.result) return;
+  const id = memId(it), h = hiddenFor(it);
+  memory = memory.filter((m) => m.id !== id);
+  it.result.regions.forEach((r, i) => {
+    if (!r.f) return;
+    memory.push({ id, f: Array.from(r.f, (v) => Math.round(v * 1000) / 1000), y: h[i], c: h[i] !== (r.f[11] ? 1 : 0) ? 1 : 0 });
+  });
+  if (memory.length > LEARN_MAX) memory = memory.slice(memory.length - LEARN_MAX);
+  saveMemory();
+  // Gambar lain yang belum dikoreksi ikut memakai ingatan terbaru.
+  for (const x of items) if (x !== it && x.result && !x.toggles.length) predictItem(x);
+  if (selected()) renderViewer();
+  refreshLearn();
+}
+
+// Tebakan per region: -1 = ikut aturan bawaan, 0 = tampil, 1 = dihapus.
+function predictItem(it) {
+  const res = it.result;
+  it.learned = new Int8Array(res.regions.length).fill(-1);
+  const others = memory.filter((m) => m.id !== memId(it));
+  if (others.length < 5) return;
+  const K = 7;
+  res.regions.forEach((r, i) => {
+    if (!r.f) return;
+    const near = [];
+    for (const m of others) {
+      let d = 0;
+      for (let j = 0; j < 12; j++) { const t = m.f[j] - r.f[j]; d += t * t; }
+      d = Math.sqrt(d);
+      if (near.length < K) near.push([d, m]);
+      else if (d < near[K - 1][0]) near[K - 1] = [d, m];
+      else continue;
+      near.sort((p, q) => p[0] - q[0]);
+    }
+    if (!near.length || near[0][0] > 0.35) return; // tidak ada contoh yang mirip
+    let hide = 0, tot = 0;
+    for (const [d, m] of near) {
+      if (d > 0.6) continue;
+      const wgt = (m.c ? 3 : 1) / (d + 0.05);
+      tot += wgt;
+      if (m.y) hide += wgt;
+    }
+    if (!tot) return;
+    const p = hide / tot, def = r.f[11] ? 1 : 0;
+    const guess = p >= 0.7 ? 1 : p <= 0.3 ? 0 : -1;
+    if (guess >= 0 && guess !== def) it.learned[i] = guess;
+  });
+}
+const learnedCount = (it) => (it.learned ? it.learned.reduce((n, v) => n + (v >= 0 ? 1 : 0), 0) : 0);
+
+function refreshLearn() {
+  const imgs = new Set(memory.map((m) => m.id)).size;
+  const corr = memory.reduce((n, m) => n + m.c, 0);
+  $('#learnStat').textContent = memory.length
+    ? `${imgs} gambar diingat · ${corr} koreksi Anda · ${memory.length} contoh`
+    : 'Belum ada ingatan. Aplikasi mulai belajar setelah Anda mengunduh hasil.';
+  $('#forgetBtn').disabled = !memory.length;
+}
+
+// ---------------------------------------------------------------- region tersembunyi
+// Klik & sembunyikan warna bekerja langsung pada vektor yang sudah ada (instan).
+function regionAt(res, sx, sy) {
+  const q = res.rmapW / res.srcW;
+  const x = Math.max(0, Math.min(res.rmapW - 1, Math.floor(sx * q)));
+  const y = Math.max(0, Math.min(res.rmapH - 1, Math.floor(sy * q)));
+  return res.rmap[y * res.rmapW + x];
+}
+// Suntingan disimpan sebagai titik (koordinat sumber) agar tetap berlaku setelah
+// gambar diproses ulang: [x, y] = hapus/kembalikan; [x, y, 'm', tx, ty] = gabung
+// region di (x, y) ke region di (tx, ty); [x, y, 'c', r, g, b] = warnai region.
+function editState(it) {
+  const res = it.result;
+  const n = res.regions.length;
+  const h = defaultHidden(res);
+  if (S.learn && S.bgKey === 'white' && it.learned) it.learned.forEach((v, i) => { if (v >= 0) h[i] = v; });
+  res.regions.forEach((r, i) => { if (it.hide.has(r.k)) h[i] = 1; });
+  const par = Int32Array.from({ length: n }, (_, i) => i);
+  const find = (i) => { while (par[i] !== i) { par[i] = par[par[i]]; i = par[i]; } return i; };
+  const col = new Array(n).fill(null);
+  let merged = false;
+  for (const ed of it.toggles) {
+    const i = regionAt(res, ed[0], ed[1]);
+    if (i < 0) continue;
+    if (ed[2] === 'm') {
+      const j = regionAt(res, ed[3], ed[4]);
+      if (j < 0) continue;
+      const a = find(i), b = find(j);
+      if (a !== b) { par[a] = b; merged = true; }
+    } else if (ed[2] === 'c') {
+      col[find(i)] = [ed[3], ed[4], ed[5]];
+    } else {
+      h[find(i)] ^= 1;
+    }
+  }
+  const pal = res.palette.map((c, k) => it.recolor[k] || c);
+  const regionColor = new Array(n);
+  let any = false;
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (r !== i) h[i] = h[r];
+    const c = col[r] || (r !== i ? pal[res.regions[r].k] : null);
+    if (c) { regionColor[i] = c; any = true; }
+  }
+  // Region gabungan yang seluruh batasnya hanya dengan satu region dari kelompok
+  // yang sama → tidak digambar di mode tumpuk (lubang tetangganya sudah terisi).
+  let absorbed = null;
+  if (merged) {
+    absorbed = new Uint8Array(n);
+    const only = new Int32Array(n).fill(-2);
+    for (const ch of res.chains) {
+      for (const [p, q] of [[ch.a, ch.b], [ch.b, ch.a]]) {
+        if (p < 0) continue;
+        if (q < 0) only[p] = -1;
+        else if (only[p] === -2) only[p] = q;
+        else if (only[p] !== q) only[p] = -1;
+      }
+    }
+    for (let i = 0; i < n; i++) if (only[i] >= 0 && find(only[i]) === find(i)) absorbed[i] = 1;
+  }
+  return { hidden: h, regionColor: any ? regionColor : null, absorbed, find };
+}
+function hiddenFor(it) { return editState(it).hidden; }
+
+// Tetangga dengan batas bersama terpanjang (yang tampil) → target "Gabung".
+function mergeTarget(it, i) {
+  const res = it.result;
+  if (!it.adj) {
+    it.adj = new Map();
+    const add = (p, q, w) => { let m = it.adj.get(p); if (!m) it.adj.set(p, (m = new Map())); m.set(q, (m.get(q) || 0) + w); };
+    for (const ch of res.chains) if (ch.a >= 0 && ch.b >= 0) { add(ch.a, ch.b, ch.p.length); add(ch.b, ch.a, ch.p.length); }
+  }
+  const st = editState(it);
+  const m = it.adj.get(i);
+  if (!m) return -1;
+  let best = -1, bw = 0;
+  for (const [j, w] of m) {
+    if (st.hidden[j] || st.find(j) === st.find(i)) continue;
+    if (w > bw) { bw = w; best = j; }
+  }
+  return best;
+}
+const visKey = (it) => `${it.id}:${it.key}:${it.toggles.length}:${it.toggles.length ? it.toggles[it.toggles.length - 1].join('/') : ''}:${[...it.hide].join(',')}:${S.learn ? learnedCount(it) : 0}`;
+function editsChanged(it) {
+  it.outline = null;
+  updateRow(it);
+  if (it.id === selId) { renderViewer(); hoverRegion = -2; updateHover(); }
+}
+
+let waiters = [];
+function pendingCount() {
+  return items.filter((it) => !isCurrent(it) && !(it.error && it.errKey === keyOf(it))).length;
+}
+function notifyWaiters() {
+  refreshStatus();
+  if (pendingCount() === 0) { const w = waiters; waiters = []; w.forEach((f) => f()); }
+}
+function allDone() {
+  return pendingCount() === 0 ? Promise.resolve() : new Promise((r) => waiters.push(r));
+}
+
+// ---------------------------------------------------------------- baris antrean
+const rowsEl = $('#rows');
+const rowEls = new Map();
+
+function createRow(it) {
+  const li = document.createElement('li');
+  li.className = 'rowi';
+  li.dataset.id = it.id;
+  li.innerHTML = `
+    <span class="idx"></span>
+    <span class="thumb"><img alt="" loading="lazy"></span>
+    <span class="meta"><span class="oname"></span><span class="sub"></span></span>
+    <span class="rthumb" title="Hasil vektor"><img alt="" hidden></span>
+    <span class="pal"></span>
+    <span class="st"><span class="stt"></span><span class="bar"><b></b></span></span>
+    <span class="acts">
+      <button type="button" class="icon" data-act="svg" title="Unduh SVG">SVG</button>
+      <button type="button" class="icon" data-act="eps" title="Unduh EPS">EPS</button>
+      <button type="button" class="icon" data-act="remove" title="Hapus dari antrean"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5"/></svg></button>
+    </span>`;
+  $('img', li).src = it.url;
+  li.addEventListener('click', (e) => {
+    const act = e.target.closest('button')?.dataset.act;
+    if (act === 'remove') { e.stopPropagation(); removeItem(it.id); return; }
+    if (act === 'svg' || act === 'eps') { e.stopPropagation(); downloadOne(it, act); return; }
+    select(it.id);
+  });
+  rowsEl.appendChild(li);
+  rowEls.set(it.id, li);
+}
+
+const STATUS_TEXT = { ai: 'Analisis AI', idle: 'Belum diproses', queued: 'Antre', working: 'Memproses', done: 'Selesai', stale: 'Perlu diperbarui', error: 'Gagal' };
+
+function updateRow(it) {
+  const li = rowEls.get(it.id);
+  if (!li) return;
+  const i = items.indexOf(it);
+  $('.idx', li).textContent = String(i + 1).padStart(2, '0');
+  $('.oname', li).textContent = outName(it.stem, i, S.code, S.start) + extLabel();
+  const dims = it.srcW ? `${it.srcW} × ${it.srcH}` : '…';
+  const out = it.srcW ? outputSize(it.srcW, it.srcH, S.size, S.customMP) : null;
+  $('.sub', li).textContent = `${it.name} · ${dims}${out ? ` → ${fmtInt(out.w)} × ${fmtInt(out.h)}` : ''}`;
+  const pal = $('.pal', li);
+  pal.innerHTML = '';
+  if (it.result) {
+    it.result.palette.slice(0, 10).forEach((c, k) => {
+      if (it.hide.has(k)) return;
+      const s = document.createElement('i');
+      s.style.background = hex(it.recolor[k] || c);
+      pal.appendChild(s);
+    });
+  }
+  updateResultThumb(it, li);
+  const st = statusOf(it);
+  const stEl = $('.st', li);
+  stEl.className = 'st ' + st;
+  let txt = STATUS_TEXT[st];
+  if (st === 'working') txt += ` ${Math.round(it.progress * 100)}%`;
+  if (st === 'error') { txt = 'Gagal'; stEl.title = it.error || ''; } else stEl.title = '';
+  $('.stt', stEl).textContent = txt;
+  $('.bar', stEl).hidden = st !== 'working';
+  $('.bar b', stEl).style.width = `${Math.round(it.progress * 100)}%`;
+  const ok = !!it.result;
+  $('[data-act="svg"]', li).disabled = !ok;
+  $('[data-act="eps"]', li).disabled = !ok;
+  li.classList.toggle('sel', it.id === selId);
+}
+
+// Pratinjau hasil vektor di baris antrean: SVG kecil (tanpa pengisi celah) yang
+// dibuat ulang hanya bila hasil atau editannya berubah, ditunda agar tidak
+// memperlambat pembaruan baris yang sering.
+const thumbTimers = new Map();
+function updateResultThumb(it, li) {
+  const img = $('.rthumb img', li);
+  if (!it.result) {
+    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    img.hidden = true; img.removeAttribute('src'); img.dataset.k = ''; img.dataset.url = '';
+    return;
+  }
+  const k = `${visKey(it)}|${JSON.stringify(it.recolor)}|${S.stacking}`;
+  if (img.dataset.k === k) return;
+  img.dataset.k = k;
+  clearTimeout(thumbTimers.get(it.id));
+  thumbTimers.set(it.id, setTimeout(() => {
+    thumbTimers.delete(it.id);
+    if (!it.result || img.dataset.k !== k) return;
+    const res = it.result, ed = editState(it);
+    const body = previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden: ed.hidden, gapFill: false, regionColor: ed.regionColor, absorbed: ed.absorbed });
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${res.W} ${res.H}" width="${res.srcW}" height="${res.srcH}" preserveAspectRatio="xMidYMid meet">${body}</svg>`;
+    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+    img.dataset.url = url;
+    img.src = url;
+    img.hidden = false;
+  }, 120));
+}
+
+function extLabel() {
+  return S.format === 'svg' ? '.svg' : S.format === 'eps' ? '.eps' : '.svg / .eps';
+}
+
+function refreshAll() {
+  items.forEach(updateRow);
+  $('#qcount').textContent = String(items.length);
+  $('#clearBtn').disabled = !items.length;
+  $('#downloadBtn').disabled = !items.length;
+  if (!items.length) rowsEl.innerHTML = '';
+  refreshName();
+  refreshSize();
+  refreshStatus();
+}
+
+function refreshStatus() {
+  const n = items.length;
+  const done = items.filter((x) => statusOf(x) === 'done').length;
+  const work = items.filter((x) => x.inflight).length;
+  const err = items.filter((x) => statusOf(x) === 'error').length;
+  const todo = items.filter(needsWork).length;
+  const pb = $('#processBtn');
+  pb.disabled = !todo || busyDownloading;
+  $('#processBtn span').textContent = todo ? `Proses ${todo} gambar` : n ? 'Semua sudah diproses' : 'Proses';
+  const parts = [];
+  if (!n) parts.push('Belum ada gambar.');
+  else {
+    parts.push(`${done}/${n} selesai`);
+    if (work) parts.push(`${work} diproses`);
+    if (err) parts.push(`${err} gagal`);
+  }
+  if (!busyDownloading) $('#pstatus').textContent = parts.join(' · ');
+  $('#qstat').textContent = n ? parts.join(' · ') : '';
+}
+
+// ---------------------------------------------------------------- penampil
+const stage = $('#stage');
+const vOrigWrap = $('#vOrigWrap'), vOrig = $('#vOrig');
+const vVec = $('#vVec'), vOut = $('#vOut');
+const vLens = $('#vLens'), vLensImg = $('#vLensImg'), vLensOut = $('#vLensOut'), vRing = $('#vRing');
+const vSplit = $('#vSplit'), vBusy = $('#vBusy'), vTwin = $('#vTwin');
+const LENS_R = 90;
+
+const V = { z: 1, px: 0, py: 0, mode: 'vector', lens: true, split: 0.5, fitted: false, mx: -1, my: -1, hover: false, scanning: false };
+try { const m = localStorage.getItem('vektor.mode'); if (m) V.mode = m; } catch { /* abaikan */ }
+// Latar pratinjau (hanya tampilan; tidak memengaruhi hasil atau proses).
+const prefersDark = () => (document.documentElement.dataset.theme ? document.documentElement.dataset.theme === 'dark' : !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches));
+try { V.bg = localStorage.getItem('vektor.stagebg') || ''; } catch { V.bg = ''; }
+function applyStageBg() {
+  const bg = V.bg || (prefersDark() ? 'dark' : 'light');
+  stage.classList.toggle('bg-light', bg === 'light');
+  stage.classList.toggle('bg-dark', bg === 'dark');
+  const b = $('[data-act="bg"]');
+  if (b) b.setAttribute('aria-pressed', String(bg === 'light'));
+}
+
+const selected = () => items.find((x) => x.id === selId) || null;
+
+function select(id) {
+  selId = id;
+  V.fitted = false;
+  items.forEach(updateRow);
+  const it = selected();
+  stage.classList.toggle('has-image', !!it);
+  if (!it) {
+    vOrig.removeAttribute('src');
+    vLensImg.removeAttribute('src');
+    vVec.innerHTML = vOut.innerHTML = vLensOut.innerHTML = '';
+    $('#palette').hidden = true;
+    $('#vinfo').textContent = '';
+    vBusy.hidden = true;
+    return;
+  }
+  vOrig.src = vLensImg.src = it.url;
+  if (it.srcW) fit();
+  renderViewer();
+  refreshSize();
+  refreshName();
+}
+
+// Mode Berdampingan: panel kiri = asli, kanan = vektor; zoom & geser sama.
+// paneOff() = tepi kiri panel kanan; paneW() = lebar satu panel.
+const paneOff = () => (V.mode === 'side' ? Math.floor(stage.clientWidth / 2) : 0);
+const paneW = () => (V.mode === 'side' ? Math.floor(stage.clientWidth / 2) : stage.clientWidth);
+const localX = (x) => (V.mode === 'side' && x >= paneOff() ? x - paneOff() : x);
+
+function fit() {
+  const it = selected();
+  if (!it || !it.srcW) return;
+  const sw = paneW(), sh = stage.clientHeight;
+  V.z = Math.min(sw / it.srcW, sh / it.srcH) * 0.92;
+  V.px = (sw - it.srcW * V.z) / 2;
+  V.py = (sh - it.srcH * V.z) / 2;
+  V.fitted = true;
+  applyView();
+}
+
+function zoomAt(mx, my, f) {
+  const z = Math.max(0.02, Math.min(64, V.z * f));
+  V.px = mx - (mx - V.px) * (z / V.z);
+  V.py = my - (my - V.py) * (z / V.z);
+  V.z = z;
+  applyView();
+}
+
+function applyView() {
+  const it = selected();
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  if (it && it.srcW) {
+    for (const img of [vOrig, vLensImg]) {
+      img.width = it.srcW;
+      img.height = it.srcH;
+      img.style.transform = `translate(${V.px}px, ${V.py}px) scale(${V.z})`;
+    }
+  }
+  const vb = `${-V.px / V.z} ${-V.py / V.z} ${sw / V.z} ${sh / V.z}`;
+  const vbR = `${-(V.px + paneOff()) / V.z} ${-V.py / V.z} ${sw / V.z} ${sh / V.z}`;
+  for (const s of [vOut, vLensOut]) s.setAttribute('viewBox', vb);
+  for (const s of [vVec, vHi]) s.setAttribute('viewBox', vbR);
+  $('#zoomLabel').textContent = `${Math.round(V.z * 100)}%`;
+  applyMode();
+}
+
+function applyMode() {
+  const it = selected();
+  const has = !!(it && it.result) && !V.scanning;
+  const sw = stage.clientWidth;
+  $$('.vbar .seg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === V.mode)));
+  $('[data-act="lens"]').setAttribute('aria-pressed', String(V.lens));
+  stage.classList.toggle('mode-outline', V.mode === 'outline');
+  stage.classList.toggle('mode-compare', V.mode === 'compare');
+  stage.classList.toggle('mode-side', V.mode === 'side');
+
+  const x = Math.round(V.split * sw);
+  vSplit.classList.toggle('fixed', V.mode === 'side');
+  vHi.style.clipPath = '';
+  if (V.mode === 'side') {
+    const off = paneOff();
+    vOrigWrap.hidden = false;
+    vOrigWrap.style.clipPath = `inset(0 ${sw - off}px 0 0)`;
+    vVec.style.display = has ? '' : 'none';
+    vVec.style.clipPath = vHi.style.clipPath = `inset(0 0 0 ${off}px)`;
+    vOut.style.display = 'none';
+    vSplit.hidden = false;
+    vSplit.style.left = `${off}px`;
+  } else if (!has) {
+    vOrigWrap.hidden = false;
+    vOrigWrap.style.clipPath = '';
+    vVec.style.display = vOut.style.display = 'none';
+    vSplit.hidden = true;
+  } else if (V.mode === 'compare') {
+    vOrigWrap.hidden = false;
+    vOrigWrap.style.clipPath = `inset(0 ${sw - x}px 0 0)`;
+    vVec.style.display = '';
+    vVec.style.clipPath = `inset(0 0 0 ${x}px)`;
+    vOut.style.display = 'none';
+    vSplit.hidden = false;
+    vSplit.style.left = `${x}px`;
+  } else {
+    vOrigWrap.hidden = true;
+    vVec.style.display = '';
+    vVec.style.clipPath = '';
+    vOut.style.display = V.mode === 'outline' ? '' : 'none';
+    vSplit.hidden = true;
+    if (V.mode === 'outline') ensureOutline(it, vOut);
+  }
+  // Lensa piksel: gambar asli + garis vektor di dalam lingkaran.
+  const lensOn = has && V.lens && V.mode === 'vector' && V.hover && V.mx >= 0;
+  vLens.hidden = vRing.hidden = !lensOn;
+  if (lensOn) {
+    ensureOutline(it, vLensOut);
+    vLens.style.clipPath = `circle(${LENS_R}px at ${V.mx}px ${V.my}px)`;
+    vRing.style.left = `${V.mx - LENS_R}px`;
+    vRing.style.top = `${V.my - LENS_R}px`;
+    vRing.style.width = vRing.style.height = `${LENS_R * 2}px`;
+  }
+}
+
+function groupTransform(res) {
+  return `scale(${res.srcW / res.W} ${res.srcH / res.H})`;
+}
+
+function ensureOutline(it, svg) {
+  if (!it || !it.result) return;
+  if (!it.outline) it.outline = outlineMarkup(it.result, hiddenFor(it));
+  if (svg.dataset.for !== visKey(it)) {
+    svg.innerHTML = `<g transform="${groupTransform(it.result)}">${it.outline}</g>`;
+    svg.dataset.for = visKey(it);
+  }
+}
+
+function renderViewer() {
+  const it = selected();
+  if (!it) return;
+  if (it.result) {
+    const res = it.result;
+    const hidden = hiddenFor(it);
+    // Kandidat: area putih di dalam gambar (tidak menyentuh tepi) yang masih tampil.
+    let cand = '';
+    if (S.bgKey === 'white') res.regions.forEach((r, i) => { if (r.f && !r.f[1] && !hidden[i]) cand += regionPathCached(it, i); });
+    const ed = editState(it);
+    vVec.innerHTML = `<g transform="${groupTransform(res)}">${previewMarkup(res, { stacking: S.stacking, recolor: it.recolor, hidden, gapFill: S.gapFill, regionColor: ed.regionColor, absorbed: ed.absorbed })}`
+      + (cand ? `<path class="cand" d="${cand}"/>` : '') + '</g>';
+    vOut.dataset.for = vLensOut.dataset.for = '';
+    const shapes = hidden.reduce((n, h) => n + (h ? 0 : 1), 0);
+    const lc = S.learn ? learnedCount(it) : 0;
+    $('#vinfo').textContent = `${res.srcW}×${res.srcH} → proses ${res.W}×${res.H} · ${res.palette.length} warna · ${fmtInt(shapes)} bentuk · ${fmtInt(res.nodes)} segmen${res.lines && res.lines.length ? ` · ${fmtInt(res.lines.length)} garis` : ''}${lc ? ` · ${lc} dikoreksi dari ingatan` : ''}`;
+    renderPalette(it);
+  } else {
+    vVec.innerHTML = '';
+    $('#vinfo').textContent = it.srcW ? `${it.srcW}×${it.srcH}` : '';
+    $('#palette').hidden = true;
+  }
+  renderBusy();
+  applyView();
+}
+
+function renderBusy() {
+  const it = selected();
+  const vProg = $('#vProg'), vScan = $('#vScan'), vReady = $('#vReady');
+  vProg.hidden = vScan.hidden = vReady.hidden = true;
+  if (!it) { vBusy.hidden = true; setScanning(false); return; }
+  const st = statusOf(it);
+  setScanning(st === 'working' || st === 'ai');
+  if (st === 'working' || st === 'ai') {
+    // Checklist "Mengubah jadi vektor" + garis pemindai di atas gambar asli.
+    vBusy.hidden = true;
+    vProg.hidden = vScan.hidden = false;
+    const cur = st === 'ai' ? 0 : Math.min(it.step || 0, STEPS.length - 1);
+    const box = $('#vSteps');
+    if (box.children.length !== STEPS.length) box.innerHTML = STEPS.map(() => '<li><i></i><span></span></li>').join('');
+    [...box.children].forEach((li, k) => {
+      li.className = k < cur ? 'done' : k === cur ? 'active' : '';
+      let label = STEPS[k];
+      if (k === 0 && st === 'ai') label = aiState || 'Menyiapkan model AI…';
+      else if (k === cur && st === 'working') label += ` ${Math.round(it.progress * 100)}%`;
+      $('span', li).textContent = label;
+    });
+    return;
+  }
+  if (st === 'queued') { vBusy.hidden = false; vBusy.textContent = 'Dalam antrean…'; }
+  else if (st === 'idle') { vBusy.hidden = false; vBusy.textContent = 'Atur pengaturan bila perlu, lalu klik Proses.'; }
+  else if (st === 'stale') { vBusy.hidden = false; vBusy.textContent = 'Pengaturan berubah — klik Proses untuk memperbarui. (Pratinjau: hasil sebelumnya)'; }
+  else if (st === 'error') { vBusy.hidden = false; vBusy.textContent = `Gagal: ${it.error}`; }
+  else vBusy.hidden = true;
+  if (st === 'done' && it.result) {
+    const shapes = hiddenFor(it).reduce((n, h) => n + (h ? 0 : 1), 0);
+    vReady.hidden = false;
+    vReady.innerHTML = `<b></b><span>Vektor siap</span> · ${fmtInt(shapes)} bentuk${it.svgBytes ? ` · ${fmtBytes(it.svgBytes)}` : ''}`;
+    scheduleSize(it);
+  }
+}
+
+// Saat proses berjalan, tampilkan gambar asli (bukan hasil lama) agar garis pemindai terlihat.
+function setScanning(on) {
+  if (V.scanning === on) return;
+  V.scanning = on;
+  stage.classList.toggle('scanning', on);
+  applyMode();
+}
+
+// Palet per gambar: ganti warna atau jadikan transparan.
+const picker = $('#colorPick');
+let pickTarget = null;
+function renderPalette(it) {
+  const box = $('#swatches');
+  box.innerHTML = '';
+  it.result.palette.forEach((c, k) => {
+    const cur = it.recolor[k] || c;
+    const off = it.hide.has(k);
+    const el = document.createElement('span');
+    el.className = 'sw' + (off ? ' off' : '') + (it.recolor[k] ? ' changed' : '') + (mergeSrc === k ? ' src' : '');
+    el.innerHTML = `<button type="button" class="chip" title="Ganti warna"></button><span>${hex(cur).toUpperCase()}</span>`
+      + (it.recolor[k] ? '<button type="button" class="x" data-a="reset" title="Kembalikan warna asli">↺</button>' : '')
+      + `<button type="button" class="x" data-a="hide" title="${off ? 'Tampilkan lagi' : 'Jadikan transparan'}">${off ? '+' : '×'}</button>`;
+    $('.chip', el).style.background = hex(cur);
+    if (it.result.whiteIdx[k]) el.title = 'Termasuk putih (latar)';
+    el.addEventListener('click', (e) => {
+      const a = e.target.closest('button');
+      if (!a) return;
+      if (a.dataset.a === 'hide') {
+        if (it.hide.has(k)) it.hide.delete(k); else it.hide.add(k);
+        editsChanged(it);
+      } else if (a.dataset.a === 'reset') {
+        delete it.recolor[k];
+        renderViewer();
+        updateRow(it);
+      } else if (tool === 'merge') {
+        // Gabung warna: klik warna sumber, lalu warna tujuan → semua bentuk
+        // berwarna sumber memakai warna tujuan (mode Potong: satu path per warna).
+        if (mergeSrc === null || mergeSrc === k) { mergeSrc = mergeSrc === k ? null : k; renderPalette(it); return; }
+        it.recolor[mergeSrc] = (it.recolor[k] || it.result.palette[k]).slice();
+        mergeSrc = null;
+        it.outline = null;
+        renderViewer();
+        updateRow(it);
+      } else if (tool === 'paint') {
+        paintColor = cur.slice();
+        $('#paintColor').value = hex(cur);
+      } else {
+        pickTarget = { it, k };
+        picker.value = hex(cur);
+        picker.click();
+      }
+    });
+    box.appendChild(el);
+  });
+  $('#palette').hidden = false;
+  $('#undoClick').disabled = !it.toggles.length;
+  $('#redoClick').disabled = !it.redo.length;
+  $('#resetClicks').disabled = !it.toggles.length;
+}
+// Alat sunting: hapus (bawaan) / gabung / warnai.
+let tool = 'erase';
+let mergeSrc = null;
+let paintColor = [255, 91, 20];
+// Satu titik di dalam region (koordinat sumber), dari peta region.
+function regionPoint(res, j) {
+  const q = res.rmapW / res.srcW;
+  const m = res.rmap;
+  let bx = -1, by = -1;
+  // Titik terdalam sederhana: cari piksel region yang keempat tetangganya juga region itu.
+  for (let y = 1; y < res.rmapH - 1 && bx < 0; y++) {
+    for (let x = 1; x < res.rmapW - 1; x++) {
+      const k = y * res.rmapW + x;
+      if (m[k] === j && m[k - 1] === j && m[k + 1] === j && m[k - res.rmapW] === j && m[k + res.rmapW] === j) { bx = x; by = y; break; }
+    }
+  }
+  if (bx < 0) for (let k = 0; k < m.length; k++) if (m[k] === j) { bx = k % res.rmapW; by = (k / res.rmapW) | 0; break; }
+  return bx < 0 ? null : [(bx + 0.5) / q, (by + 0.5) / q];
+}
+function setTool(t) {
+  tool = t;
+  $$('#tools button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === t)));
+  $('#paintColor').hidden = t !== 'paint';
+  $('.phint').textContent = {
+    erase: 'Klik bentuk untuk menghapus / mengembalikan',
+    merge: 'Klik bentuk untuk melebur ke tetangga bergaris biru · klik 2 warna palet untuk menggabungkannya',
+    paint: 'Klik bentuk untuk mewarnai · klik warna palet / Alt+klik bentuk = ambil warna',
+  }[t];
+  mergeSrc = null;
+  if (selected() && selected().result) renderPalette(selected());
+  hoverRegion = -2;
+  updateHover();
+}
+$$('#tools button').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
+$('#paintColor').addEventListener('input', (e) => { const v = e.target.value; paintColor = [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16)); });
+
+function undoClick() {
+  const it = selected();
+  if (!it || !it.toggles.length) return;
+  it.redo.push(it.toggles[it.toggles.length - 1]);
+  it.toggles = it.toggles.slice(0, -1);
+  editsChanged(it);
+}
+function redoClick() {
+  const it = selected();
+  if (!it || !it.redo.length) return;
+  it.toggles = [...it.toggles, it.redo.pop()];
+  editsChanged(it);
+}
+$('#undoClick').addEventListener('click', undoClick);
+$('#redoClick').addEventListener('click', redoClick);
+$('#resetClicks').addEventListener('click', () => {
+  const it = selected();
+  if (!it) return;
+  it.toggles = [];
+  it.redo = [];
+  editsChanged(it);
+});
+let pickRaf = 0;
+picker.addEventListener('input', () => {
+  if (!pickTarget) return;
+  const v = picker.value;
+  pickTarget.it.recolor[pickTarget.k] = [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16));
+  cancelAnimationFrame(pickRaf);
+  pickRaf = requestAnimationFrame(() => { if (pickTarget.it.id === selId) renderViewer(); updateRow(pickTarget.it); });
+});
+
+$('#cancelBtn').addEventListener('click', () => cancelItem(selected()));
+
+// Interaksi penampil.
+let drag = null;
+stage.addEventListener('pointerdown', (e) => {
+  if (!selected() || e.target.closest('#vProg')) return;
+  stage.focus({ preventScroll: true });
+  const onSplit = V.mode === 'compare' && !vSplit.hidden && e.target.closest('#vSplit');
+  drag = { x: e.clientX, y: e.clientY, px: V.px, py: V.py, split: onSplit };
+  stage.setPointerCapture(e.pointerId);
+  if (!onSplit) stage.classList.add('dragging');
+});
+stage.addEventListener('pointermove', (e) => {
+  const r = stage.getBoundingClientRect();
+  V.mx = e.clientX - r.left;
+  V.my = e.clientY - r.top;
+  V.hover = true;
+  if (drag) {
+    if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 4) drag.moved = true;
+    if (drag.split) V.split = Math.max(0, Math.min(1, V.mx / r.width));
+    else { V.px = drag.px + (e.clientX - drag.x); V.py = drag.py + (e.clientY - drag.y); }
+    applyView();
+  } else {
+    if (V.mode === 'vector' && V.lens) applyMode();
+    updateHover();
+  }
+  updateTwin();
+});
+// Berdampingan: tanda silang di titik yang sama pada panel seberang.
+function updateTwin() {
+  const on = V.mode === 'side' && V.hover && V.mx >= 0 && !!selected();
+  vTwin.hidden = !on;
+  if (!on) return;
+  const off = paneOff();
+  vTwin.style.left = `${V.mx < off ? V.mx + off : V.mx - off}px`;
+  vTwin.style.top = `${V.my}px`;
+}
+
+// Sorot bentuk di bawah kursor (seperti vectorizer.ai); klik = hapus/kembalikan.
+const vHi = $('#vHi');
+function regionPathCached(it, i) {
+  let d = it.paths.get(i);
+  if (!d) { d = regionPath(it.result, i); it.paths.set(i, d); }
+  return d;
+}
+let hoverRegion = -2;
+function pointRegion() {
+  const it = selected();
+  if (!it || !it.result || !V.hover || V.mx < 0) return -1;
+  if (V.mode === 'compare' && V.mx < V.split * stage.clientWidth) return -1;
+  if (V.mode === 'side' && V.mx < paneOff()) return -1; // panel "Asli"
+  const sx = (localX(V.mx) - V.px) / V.z, sy = (V.my - V.py) / V.z;
+  if (sx < 0 || sy < 0 || sx >= it.result.srcW || sy >= it.result.srcH) return -1;
+  return regionAt(it.result, sx, sy);
+}
+function updateHover() {
+  const it = selected();
+  const i = drag ? -1 : pointRegion();
+  if (i === hoverRegion) return;
+  hoverRegion = i;
+  stage.classList.toggle('pick', i >= 0);
+  if (i < 0) { vHi.innerHTML = ''; return; }
+  const d = regionPathCached(it, i);
+  let extra = '';
+  if (tool === 'merge') {
+    const j = mergeTarget(it, i);
+    if (j >= 0) extra = `<path class="target" d="${regionPathCached(it, j)}"/>`;
+  }
+  vHi.innerHTML = `<g transform="${groupTransform(it.result)}">${extra}<path d="${d}"/></g>`;
+}
+const endDrag = () => { drag = null; stage.classList.remove('dragging'); };
+// Klik tanpa geser = hapus/kembalikan region di titik itu (seperti koreksi latar vectorizer.ai).
+stage.addEventListener('pointerup', (e) => {
+  const d = drag;
+  endDrag();
+  const it = selected();
+  if (!d || d.moved || d.split || e.button !== 0 || !it || !it.result || !it.srcW) return;
+  const r = stage.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  if (V.mode === 'compare' && mx < V.split * r.width) return; // sisi "Asli"
+  if (V.mode === 'side' && mx < paneOff()) return;
+  const sx = (localX(mx) - V.px) / V.z, sy = (my - V.py) / V.z;
+  if (sx < 0 || sy < 0 || sx >= it.srcW || sy >= it.srcH) return;
+  const ri = regionAt(it.result, sx, sy);
+  if (ri < 0) return;
+  let ed = [sx, sy];
+  if (tool === 'paint' && e.altKey) {
+    // Alt+klik = ambil warna bentuk ini.
+    const st = editState(it);
+    const c = (st.regionColor && st.regionColor[ri]) || it.recolor[it.result.regions[ri].k] || it.result.palette[it.result.regions[ri].k];
+    paintColor = c.slice();
+    $('#paintColor').value = hex(paintColor);
+    return;
+  }
+  if (tool === 'merge') {
+    const j = mergeTarget(it, ri);
+    if (j < 0) return;
+    const p = regionPoint(it.result, j);
+    if (!p) return;
+    ed = [sx, sy, 'm', p[0], p[1]];
+  } else if (tool === 'paint') {
+    ed = [sx, sy, 'c', ...paintColor];
+  }
+  it.toggles = [...it.toggles, ed];
+  it.redo = [];
+  editsChanged(it);
+});
+stage.addEventListener('pointercancel', endDrag);
+stage.addEventListener('pointerleave', () => { V.hover = false; updateTwin(); if (!drag) { applyMode(); updateHover(); } });
+stage.addEventListener('wheel', (e) => {
+  if (!selected()) return;
+  e.preventDefault();
+  const r = stage.getBoundingClientRect();
+  zoomAt(localX(e.clientX - r.left), e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+}, { passive: false });
+new ResizeObserver(() => { if (V.fitted) fit(); else applyView(); }).observe(stage);
+
+function setMode(m) {
+  const w0 = paneW();
+  V.mode = m;
+  try { localStorage.setItem('vektor.mode', V.mode); } catch { /* abaikan */ }
+  // Lebar panel berubah (Berdampingan <-> lainnya): titik tengah tetap di tengah.
+  if (paneW() !== w0) { if (V.fitted) fit(); else { V.px += (paneW() - w0) / 2; applyView(); } }
+  else applyMode();
+  updateTwin();
+}
+$$('.vbar .seg button').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+function toolAct(act) {
+  const sw = paneW(), sh = stage.clientHeight;
+  if (act === 'zoomin') zoomAt(sw / 2, sh / 2, 1.5);
+  else if (act === 'zoomout') zoomAt(sw / 2, sh / 2, 1 / 1.5);
+  else if (act === 'fit') fit();
+  else if (act === 'one') { V.fitted = false; zoomAt(sw / 2, sh / 2, 1 / V.z); }
+  else if (act === 'lens') { V.lens = !V.lens; applyMode(); }
+  else if (act === 'bg') {
+    V.bg = (V.bg || (prefersDark() ? 'dark' : 'light')) === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('vektor.stagebg', V.bg); } catch { /* abaikan */ }
+    applyStageBg();
+    return;
+  }
+  if (act !== 'fit' && act !== 'lens') V.fitted = false;
+}
+$$('.tools [data-act]').forEach((b) => b.addEventListener('click', () => toolAct(b.dataset.act)));
+window.addEventListener('keydown', (e) => {
+  if (e.target.closest('input, textarea')) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) redoClick(); else undoClick();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redoClick(); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const map = { '+': 'zoomin', '=': 'zoomin', '-': 'zoomout', '0': 'fit', '1': 'one', l: 'lens', L: 'lens', b: 'bg', B: 'bg' };
+  if (map[e.key] && selected()) { toolAct(map[e.key]); e.preventDefault(); }
+  const tools = { h: 'erase', g: 'merge', w: 'paint', H: 'erase', G: 'merge', W: 'paint' };
+  if (tools[e.key] && selected()) { setTool(tools[e.key]); return; }
+  if (e.key === 'p' || e.key === 'P') { togglePanel(); return; }
+  const modes = { c: 'compare', s: 'side', v: 'vector', o: 'outline' };
+  if (modes[e.key] && selected()) setMode(modes[e.key]);
+});
+
+// ---------------------------------------------------------------- panel
+function bindSettings() {
+  $$('.panel .seg[data-opt], .chips[data-opt]').forEach((seg) => {
+    const opt = seg.dataset.opt;
+    seg.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      const raw = b.dataset.v;
+      const v = typeof DEFAULTS[opt] === 'number' ? Number(raw) : raw;
+      if (opt === 'mode' && v !== S.mode) applyModeDefaults(S.mode, v);
+      S[opt] = v;
+      changed(opt);
+    });
+  });
+  $$('.panel input[type="range"][data-opt]').forEach((el) => {
+    el.addEventListener('input', () => { S[el.dataset.opt] = Number(el.value); changed(el.dataset.opt); });
+  });
+  $$('.panel input[type="checkbox"][data-opt]').forEach((el) => {
+    el.addEventListener('change', () => { S[el.dataset.opt] = el.checked; changed(el.dataset.opt); });
+  });
+  $('#maxColors').addEventListener('change', (e) => {
+    S.maxColors = Math.max(2, Math.min(64, Math.round(Number(e.target.value) || 12)));
+    changed('maxColors');
+  });
+  $('#customMP').addEventListener('input', (e) => {
+    S.customMP = Math.max(15, Number(e.target.value) || 15);
+    changed('customMP');
+  });
+  $('#code').addEventListener('input', (e) => { S.code = e.target.value; changed('code'); });
+  $('#start').addEventListener('input', (e) => { S.start = Math.max(0, Math.round(Number(e.target.value) || 0)); changed('start'); });
+  $$('input[name="format"]').forEach((el) => el.addEventListener('change', () => { S.format = el.value; changed('format'); }));
+  // Default: semua pengaturan kembali ke bawaan; kode nama file & nomor mulai tetap.
+  $('#defaultsBtn').addEventListener('click', () => {
+    const keep = { code: S.code, start: S.start };
+    Object.keys(S).forEach((k) => { if (!(k in DEFAULTS)) delete S[k]; });
+    Object.assign(S, DEFAULTS, keep);
+    items.forEach((it) => { it.outline = null; });
+    changed('mode');
+    renderViewer();
+    refreshName();
+    refreshSize();
+  });
+}
+
+// ---------------------------------------------------------------- tema
+const THEMES = ['', 'light', 'dark'];
+const THEME_NAME = { '': 'otomatis (ikut sistem)', light: 'terang', dark: 'gelap' };
+function applyTheme(t) {
+  if (t) document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  const b = $('#themeBtn');
+  if (b) { b.title = `Tema: ${THEME_NAME[t]} — klik untuk ganti`; b.dataset.mode = t || 'auto'; }
+  applyStageBg();
+}
+let theme = '';
+try { theme = localStorage.getItem('vektor.theme') || ''; } catch { /* abaikan */ }
+$('#themeBtn').addEventListener('click', () => {
+  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  try { localStorage.setItem('vektor.theme', theme); } catch { /* abaikan */ }
+  applyTheme(theme);
+});
+applyTheme(theme);
+
+// ---------------------------------------------------------------- panel kanan
+function applyPanel(off) {
+  document.documentElement.classList.toggle('panel-off', off);
+  const b = $('#panelBtn');
+  b.setAttribute('aria-expanded', String(!off));
+  b.title = off ? 'Tampilkan panel pengaturan (P)' : 'Sembunyikan panel pengaturan (P)';
+}
+function togglePanel() {
+  const off = !document.documentElement.classList.contains('panel-off');
+  try { localStorage.setItem('vektor.panel', off ? 'hidden' : 'shown'); } catch { /* abaikan */ }
+  applyPanel(off);
+}
+$('#panelBtn').addEventListener('click', togglePanel);
+applyPanel(document.documentElement.classList.contains('panel-off'));
+
+const LABELS = {
+  colorMerge: (v) => `ΔE ${v}`,
+  smooth: (v) => `${Number(v).toFixed(2)} px`,
+  rough: (v) => (Number(v) ? `${Number(v).toFixed(1)} px` : 'mati'),
+  minArea: (v) => `${v} px²`,
+  corner: (v) => `${v}°`,
+  whiteTol: (v) => `ΔE ${v}`,
+  silThreshold: (v) => `${v}`,
+  keyTol: (v) => `${v}%`,
+  gradColors: (v) => `${v} warna`,
+};
+
+function syncControls() {
+  $$('.panel .seg[data-opt], .chips[data-opt]').forEach((seg) => {
+    const v = String(S[seg.dataset.opt]);
+    $$('button', seg).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
+  });
+  $$('.panel input[type="range"][data-opt]').forEach((el) => {
+    el.value = S[el.dataset.opt];
+    const out = $(`output[for="${el.id}"]`);
+    if (out) out.textContent = LABELS[el.dataset.opt](S[el.dataset.opt]);
+  });
+  $$('.panel input[type="checkbox"][data-opt]').forEach((el) => { el.checked = !!S[el.dataset.opt]; });
+  $('#maxColors').value = S.maxColors;
+  $('#maxColors').disabled = !!S.colorAuto;
+  $('#customMP').value = S.customMP;
+  $('#customField').hidden = S.size !== 'custom';
+  $('#code').value = S.code;
+  $('#start').value = S.start;
+  $$('input[name="format"]').forEach((el) => { el.checked = el.value === S.format; });
+  $('#stackNote').textContent = S.stacking === 'stacked'
+    ? 'Bentuk ditumpuk dari belakang ke depan — tanpa retak di bentuk bersarang, mudah diedit.'
+    : 'Bentuk saling memotong tanpa tumpang tindih — cocok untuk cutting plotter dan sablon.';
+  const keys = [S.mode, `${S.mode}:${S.silTones}`];
+  $$('[data-show], [data-bg]').forEach((el) => {
+    const okMode = !el.dataset.show || el.dataset.show.split(' ').some((t) => keys.includes(t));
+    const okBg = !el.dataset.bg || el.dataset.bg === S.bgKey;
+    el.hidden = !(okMode && okBg);
+  });
+  $('#cavityNote').textContent = {
+    smart: 'Eksperimental: juga menebak putih terkurung yang termasuk latar. Bisa keliru — periksa hasilnya.',
+    transparent: 'Semua putih menjadi transparan, termasuk di dalam objek (bisa dikembalikan dengan klik).',
+    fill: 'Siluet padat: rongga di dalam objek diisi warna siluet.',
+    white: 'Hanya putih luar yang dihapus; putih di dalam (garis putus-putus) klik untuk menghapus.',
+  }[S.cavity] || '';
+  $('#whiteNote').textContent = {
+    off: 'Latar putih dipertahankan.',
+    outer: 'Hanya putih yang tersambung ke tepi gambar. Putih di dalam (garis putus-putus) klik untuk menghapus.',
+    ai: 'Putih luar + putih di dalam yang dinilai latar oleh AI (model 44 MB, diunduh sekali; ±10 dtk per gambar). Khusus ilustrasi berwarna.',
+    smart: 'Eksperimental: juga menebak putih terkurung yang termasuk latar. Bisa keliru — periksa hasilnya.',
+    all: 'Semua area putih, termasuk di dalam objek.',
+  }[S.whiteMode] || '';
+}
+
+function changed(opt) {
+  saveSettings();
+  syncControls();
+  if (PROC.includes(opt)) {
+    items.forEach(updateRow);
+    renderBusy();
+    refreshStatus();
+    return;
+  }
+  if (opt === 'stacking' || opt === 'learn' || opt === 'gapFill') { items.forEach((it) => { it.outline = null; }); renderViewer(); }
+  items.forEach(updateRow);
+  refreshName();
+  refreshSize();
+}
+
+function refreshSize() {
+  const el = $('#sizeReadout');
+  const it = selected() || items[0];
+  if (!it || !it.srcW) {
+    const ex = outputSize(4, 3, S.size === 'orig' ? '15' : S.size, S.customMP);
+    el.innerHTML = S.size === 'orig' ? 'Mengikuti ukuran asli tiap gambar.' : `<b>${fmtMP(ex.w, ex.h)} MP</b> · contoh 4:3 → ${fmtInt(ex.w)} × ${fmtInt(ex.h)} px`;
+    return;
+  }
+  const o = outputSize(it.srcW, it.srcH, S.size, S.customMP);
+  const low = o.w * o.h < 15e6;
+  el.innerHTML = `<b>${fmtMP(o.w, o.h)} MP</b> (${fmtInt(o.w)} × ${fmtInt(o.h)} px)`
+    + (low ? ' <span class="warn">· di bawah 15 MP</span>' : '');
+}
+
+function refreshName() {
+  const el = $('#nameExample');
+  const it = items[0];
+  const stem = it ? it.stem : 'nama_file';
+  const ext = S.format === 'eps' ? '.eps' : '.svg';
+  if (!S.code.trim()) el.innerHTML = `Belum ada kode — file memakai nama asli: <b>${esc(stem + ext)}</b>`;
+  else el.innerHTML = `Contoh hasil: <b>${esc(outName(stem, 0, S.code, S.start) + ext)}</b>`;
+}
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+// ---------------------------------------------------------------- unduh
+function exportOpts(it) {
+  return {
+    size: outputSize(it.srcW || it.result.srcW, it.srcH || it.result.srcH, S.size, S.customMP),
+    stacking: S.stacking,
+    gapFill: S.gapFill,
+    gapWidth: GAP_WIDTH,
+    recolor: it.recolor,
+    ...(() => { const ed = editState(it); return { hidden: ed.hidden, regionColor: ed.regionColor, absorbed: ed.absorbed }; })(),
+  };
+}
+
+function downloadOne(it, kind) {
+  if (!it.result) return;
+  const i = items.indexOf(it);
+  const base = outName(it.stem, i, S.code, S.start);
+  const o = exportOpts(it);
+  const data = kind === 'svg' ? buildSVG(it.result, o) : buildEPS(it.result, o, base);
+  remember(it);
+  saveBlob(new Blob([data], { type: kind === 'svg' ? 'image/svg+xml' : 'application/postscript' }), `${base}.${kind}`);
+}
+
+let busyDownloading = false;
+async function downloadAll() {
+  if (!items.length || busyDownloading) return;
+  busyDownloading = true;
+  const btn = $('#downloadBtn');
+  const st = $('#pstatus');
+  btn.disabled = true;
+  try {
+    if (items.some(needsWork)) processAll();
+    if (pendingCount()) {
+      st.textContent = 'Menunggu semua gambar selesai diproses…';
+      await allDone();
+    }
+    const files = [];
+    const used = new Set();
+    const both = S.format === 'both';
+    let skipped = 0;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (!isCurrent(it)) { skipped++; continue; }
+      let base = outName(it.stem, i, S.code, S.start);
+      let n = 2;
+      while (used.has(base)) base = `${outName(it.stem, i, S.code, S.start)}-${n++}`;
+      used.add(base);
+      const o = exportOpts(it);
+      if (S.format !== 'eps') files.push({ name: (both ? 'SVG/' : '') + base + '.svg', data: buildSVG(it.result, o) });
+      if (S.format !== 'svg') files.push({ name: (both ? 'EPS/' : '') + base + '.eps', data: buildEPS(it.result, o, base) });
+      remember(it);
+      st.textContent = `Menyusun file ${i + 1}/${items.length}…`;
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    if (!files.length) { st.textContent = 'Tidak ada gambar yang berhasil diproses.'; return; }
+    const zip = await makeZip(files, (p) => { st.textContent = `Mengompres ZIP ${Math.round(p * 100)}%`; });
+    const tag = S.format === 'both' ? 'svg-eps' : S.format;
+    const stamp = new Date().toISOString().slice(0, 10);
+    saveBlob(zip, `${S.code.trim() ? S.code.trim() + '_' : ''}vektor_${tag}_${stamp}.zip`);
+    st.textContent = `Selesai · ${files.length} file${skipped ? ` · ${skipped} gambar gagal dilewati` : ''}`;
+  } finally {
+    busyDownloading = false;
+    btn.disabled = !items.length;
+  }
+}
+
+// ---------------------------------------------------------------- input file
+$('#addBtn').addEventListener('click', () => $('#fileInput').click());
+$('#fileInput').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
+$('#clearBtn').addEventListener('click', () => {
+  for (const it of [...items]) removeItem(it.id);
+});
+$('#downloadBtn').addEventListener('click', downloadAll);
+$('#processBtn').addEventListener('click', processAll);
+$('#forgetBtn').addEventListener('click', () => {
+  if (!confirm('Hapus semua yang sudah dipelajari dari unduhan Anda?')) return;
+  memory = [];
+  saveMemory();
+  for (const it of items) if (it.result) predictItem(it);
+  items.forEach((it) => { it.outline = null; });
+  renderViewer();
+  refreshLearn();
+});
+
+const veil = $('#dropveil');
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+window.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; veil.hidden = false; });
+window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; veil.hidden = true; } });
+window.addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  veil.hidden = true;
+  addFiles(e.dataTransfer.files);
+});
+window.addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) addFiles(files);
+});
+
+// ---------------------------------------------------------------- mulai
+bindSettings();
+applyStageBg();
+syncControls();
+refreshLearn();
+refreshAll();
+applyView();

@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="id" class="locked">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vektor — Batch Vectorizer</title>
+  <meta name="description" content="Ubah gambar raster menjadi SVG dan EPS secara batch, langsung di browser. Upscale 4×, buang latar putih, ukuran siap microstock.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23141414'/%3E%3Cpath d='M7 23C10 9 22 9 25 23' fill='none' stroke='%23ff5b14' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>try { const t = localStorage.getItem('vektor.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; if (localStorage.getItem('vektor.panel') === 'hidden') document.documentElement.classList.add('panel-off'); } catch (e) { /* abaikan */ }</script>
+  <link rel="stylesheet" href="styles.css?v=202611191100">
+</head>
+<body>
+  <div class="gate" id="gate">
+    <form class="gate-box" id="gateForm" autocomplete="off">
+      <div class="gate-brand">
+        <svg viewBox="0 0 40 24" aria-hidden="true"><path d="M4 20C9 4 31 4 36 20" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20 11 6M36 20 29 6" stroke="currentColor" stroke-width="1"/><rect x="2" y="18" width="4" height="4" fill="var(--accent)"/><rect x="34" y="18" width="4" height="4" fill="var(--accent)"/><circle cx="11" cy="6" r="1.8" fill="currentColor"/><circle cx="29" cy="6" r="1.8" fill="currentColor"/></svg>
+        <span>Vektor</span>
+      </div>
+      <label for="gatePw">Kata sandi</label>
+      <input id="gatePw" type="password" inputmode="text" autocomplete="current-password" required>
+      <button class="btn primary" id="gateBtn" type="submit">Masuk</button>
+      <p class="gate-msg" id="gateMsg" aria-live="polite"></p>
+      <noscript><p class="gate-msg err">Aktifkan JavaScript untuk memakai Vektor.</p></noscript>
+    </form>
+  </div>
+  <header class="top">
+    <a class="brand" href="./" aria-label="Vektor">
+      <svg viewBox="0 0 40 24" aria-hidden="true"><path d="M4 20C9 4 31 4 36 20" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20 11 6M36 20 29 6" stroke="currentColor" stroke-width="1"/><rect x="2" y="18" width="4" height="4" fill="var(--accent)"/><rect x="34" y="18" width="4" height="4" fill="var(--accent)"/><circle cx="11" cy="6" r="1.8" fill="currentColor"/><circle cx="29" cy="6" r="1.8" fill="currentColor"/></svg>
+      <span>Vektor</span>
+    </a>
+    <p class="tag">Raster ke SVG &amp; EPS, banyak sekaligus. Semua diproses di browser Anda — tidak ada file yang diunggah.</p>
+    <button class="btn ghost" id="addBtn" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6"/></svg>
+      Tambah gambar
+    </button>
+    <button class="btn ghost icon" id="panelBtn" type="button" title="Sembunyikan panel pengaturan" aria-label="Panel pengaturan" aria-controls="settingsPanel" aria-expanded="true">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10 2.5v11" stroke="currentColor" stroke-width="1.4"/><path class="pb-fill" d="M10 3.2h3.8v9.6H10z" fill="currentColor"/></svg>
+    </button>
+    <button class="btn ghost icon theme-btn" id="themeBtn" type="button" title="Tema: otomatis" aria-label="Tema">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></svg>
+    </button>
+    <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" multiple hidden>
+  </header>
+
+  <main class="layout">
+    <section class="work">
+      <div class="viewer" id="viewer">
+        <div class="vbar">
+          <div class="seg" role="radiogroup" aria-label="Mode tampilan">
+            <button type="button" data-mode="compare" aria-pressed="false" title="Geser pembatas (C)">Bandingkan</button>
+            <button type="button" data-mode="side" aria-pressed="false" title="Asli dan vektor berdampingan, zoom &amp; geser bersamaan (S)">Berdampingan</button>
+            <button type="button" data-mode="vector" aria-pressed="true">Vektor</button>
+            <button type="button" data-mode="outline" aria-pressed="false">Garis</button>
+          </div>
+          <div class="tools">
+            <button type="button" class="icon" data-act="zoomout" title="Perkecil (−)"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 7h4M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="icon" data-act="zoomin" title="Perbesar (+)"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5 7h4M7 5v4M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="icon" data-act="fit" title="Pas layar (0)"><svg viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="icon txt" data-act="one" title="Ukuran piksel asli (1)">1:1</button>
+            <button type="button" class="icon" data-act="lens" aria-pressed="true" title="Lensa piksel (L)"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6 5h1v1H6zM8 7h1v1H8zM6 9h1v1H6zM10 9h1v1h-1z" fill="currentColor"/></svg></button>
+            <button type="button" class="icon" data-act="bg" title="Latar pratinjau: gelap / terang (B) — hanya tampilan"><svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 13.5 13.5 2.5V12a1.5 1.5 0 0 1-1.5 1.5z" fill="currentColor"/></svg></button>
+            <span class="zoom mono" id="zoomLabel">100%</span>
+          </div>
+          <div class="vinfo mono" id="vinfo"></div>
+        </div>
+
+        <div class="stage" id="stage" tabindex="0" aria-label="Pratinjau">
+          <div class="layer full" id="vOrigWrap"><img class="orig" id="vOrig" alt="" draggable="false"></div>
+          <svg class="layer vec" id="vVec" xmlns="http://www.w3.org/2000/svg"></svg>
+          <svg class="layer out" id="vOut" xmlns="http://www.w3.org/2000/svg"></svg>
+          <svg class="layer hi" id="vHi" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div class="layer lens" id="vLens" hidden>
+            <img class="orig" id="vLensImg" alt="" draggable="false">
+            <svg class="out" id="vLensOut" xmlns="http://www.w3.org/2000/svg"></svg>
+          </div>
+          <div class="ring" id="vRing" hidden></div>
+          <div class="twin" id="vTwin" hidden></div>
+          <div class="split" id="vSplit" hidden><span>Asli</span><i></i><span>Vektor</span></div>
+          <div class="busy mono" id="vBusy" hidden></div>
+          <div class="scan" id="vScan" hidden aria-hidden="true"><i></i></div>
+          <div class="prog" id="vProg" hidden role="status" aria-live="polite">
+            <h3>Mengubah jadi vektor</h3>
+            <ol class="steps" id="vSteps"></ol>
+            <button type="button" class="btn dark" id="cancelBtn">Batalkan proses</button>
+          </div>
+          <div class="ready mono" id="vReady" hidden></div>
+
+          <label class="drop" id="drop" for="fileInput">
+            <span class="drop-mark" aria-hidden="true">
+              <svg viewBox="0 0 120 64"><path d="M10 54C26 8 94 8 110 54" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 54 34 14M110 54 86 14" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/><rect x="5" y="49" width="10" height="10" fill="var(--accent)"/><rect x="105" y="49" width="10" height="10" fill="var(--accent)"/><circle cx="34" cy="14" r="3.5" fill="currentColor"/><circle cx="86" cy="14" r="3.5" fill="currentColor"/></svg>
+            </span>
+            <strong>Letakkan gambar di sini</strong>
+            <span>atau klik untuk memilih — PNG, JPG, WEBP. Bisa banyak file sekaligus.</span>
+          </label>
+        </div>
+
+        <div class="palette" id="palette" hidden>
+          <span class="seg tools-seg" id="tools" role="radiogroup" aria-label="Alat sunting">
+            <button type="button" data-tool="erase" aria-pressed="true" title="Hapus / kembalikan bentuk (H)">Hapus</button>
+            <button type="button" data-tool="merge" aria-pressed="false" title="Lebur bentuk ke tetangganya (G)">Gabung</button>
+            <button type="button" data-tool="paint" aria-pressed="false" title="Warnai satu bentuk (W) · Alt+klik = ambil warna">Warnai</button>
+          </span>
+          <input type="color" id="paintColor" value="#ff5b14" title="Warna kuas" hidden>
+          <span class="plabel mono">Palet</span>
+          <div class="swatches" id="swatches"></div>
+          <span class="phint">Klik bentuk untuk menghapus / mengembalikan</span>
+          <span class="edits">
+            <button type="button" class="icon" id="undoClick" title="Urungkan (Ctrl+Z)" disabled><svg viewBox="0 0 16 16"><path d="M6 4 2.5 7.5 6 11M3 7.5h6.5a3.5 3.5 0 0 1 0 7H8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="icon" id="redoClick" title="Ulangi (Ctrl+Shift+Z)" disabled><svg viewBox="0 0 16 16"><path d="M10 4l3.5 3.5L10 11M13 7.5H6.5a3.5 3.5 0 0 0 0 7H8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></button>
+            <button type="button" class="btn ghost small" id="resetClicks" disabled>Reset</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="queue">
+        <div class="qhead">
+          <h2>Antrean <span class="mono" id="qcount">0</span></h2>
+          <div class="qstat mono" id="qstat"></div>
+          <button class="btn primary small" id="processBtn" type="button" disabled>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" fill="currentColor"/></svg>
+            <span>Proses</span>
+          </button>
+          <button class="btn ghost small" id="clearBtn" type="button" disabled>Kosongkan</button>
+        </div>
+        <ol class="rows" id="rows"></ol>
+      </div>
+    </section>
+
+    <aside class="panel" id="settingsPanel" aria-label="Pengaturan">
+      <div class="preset-row"><span>Pengaturan tersimpan otomatis di browser ini.</span><button type="button" class="btn ghost small" id="defaultsBtn" title="Kembalikan semua pengaturan ke nilai bawaan (kode nama file tidak diubah)">Default</button></div>
+      <div class="panel-scroll">
+        <section class="group">
+          <h3><span class="n mono">01</span> Kode nama file</h3>
+          <p class="note">Pola: <code class="mono">[kode]_[urutan]_[nama_awal]</code></p>
+          <div class="row-inline">
+            <label class="input"><span>Kode</span><input class="mono" id="code" type="text" placeholder="mis. 011" autocomplete="off" spellcheck="false"></label>
+            <label class="input short"><span>Mulai</span><input class="mono" id="start" type="number" min="0" step="1" value="1"></label>
+          </div>
+          <p class="example" id="nameExample"></p>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">02</span> Pemrosesan</h3>
+          <div class="field">
+            <div class="flabel">Mode<span class="help" tabindex="0" role="note" data-tip="Warna: ilustrasi flat berwarna.&#10;Siluet: stensil, logo hitam-putih, emblem.&#10;Gradien: gambar penuh gradasi/cahaya (banyak tingkat warna)." aria-label="Warna: ilustrasi flat berwarna.&#10;Siluet: stensil, logo hitam-putih, emblem.&#10;Gradien: gambar penuh gradasi/cahaya (banyak tingkat warna).">?</span></div>
+            <div class="seg wide" data-opt="mode">
+              <button type="button" data-v="color">Warna</button>
+              <button type="button" data-v="silhouette">Siluet</button>
+              <button type="button" data-v="gradient">Gradien</button>
+            </div>
+          </div>
+          <div class="field" data-show="gradient">
+            <label class="flabel" for="gradColors">Jumlah warna<span class="help" tabindex="0" role="note" data-tip="Banyaknya tingkat warna untuk membentuk gradasi.&#10;Kecil: file ringan, gradasi tampak berpita.&#10;Besar: gradasi lebih halus, bentuk lebih banyak." aria-label="Banyaknya tingkat warna untuk membentuk gradasi.&#10;Kecil: file ringan, gradasi tampak berpita.&#10;Besar: gradasi lebih halus, bentuk lebih banyak.">?</span> <output class="mono" for="gradColors"></output></label>
+            <input type="range" id="gradColors" data-opt="gradColors" min="16" max="128" step="4">
+            <div class="scale mono"><span>ringan</span><span>detail</span></div>
+            <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="lineStrokes"><span><b>Garis tipis → garis vektor</b><small>Garis setipis ≤ 3 px dikenali dan dibuat sebagai garis (stroke) bertebal seragam, bukan isian.</small></span></label>
+            <label class="check" style="margin-top:8px"><input type="checkbox" data-opt="glowRings"><span><b>Cahaya bulat → cincin</b><small>Bulan, matahari, atau lampu bulat (juga yang tertutup sebagian, mis. setengah di balik gunung) dideteksi; cahaya di sekitarnya dibuat cincin sepusat yang makin redup ke luar. Benda di depannya tidak diubah.</small></span></label>
+            <label class="check" style="margin-top:8px"><input type="checkbox" data-opt="arcSnap"><span><b>Lingkaran &amp; busur sempurna</b><small>Tepi yang hampir lingkaran/busur dijadikan lingkaran/busur sempurna. Matikan bila bentuk bulat di gambar memang tidak sempurna.</small></span></label>
+            <p class="note">Untuk gambar penuh gradasi/cahaya. Gradasi dibentuk dari banyak tingkat warna (seperti vectorizer.ai).</p>
+          </div>
+          <div class="field" data-show="silhouette">
+            <div class="flabel">Nada<span class="help" tabindex="0" role="note" data-tip="Hitam + abu-abu: hitam dan setiap tingkat abu-abu dipertahankan.&#10;Hitam saja: hanya hitam, ditentukan ambang gelap/terang." aria-label="Hitam + abu-abu: hitam dan setiap tingkat abu-abu dipertahankan.&#10;Hitam saja: hanya hitam, ditentukan ambang gelap/terang.">?</span></div>
+            <div class="seg wide" data-opt="silTones">
+              <button type="button" data-v="gray">Hitam + abu-abu</button>
+              <button type="button" data-v="binary">Hitam saja</button>
+            </div>
+          </div>
+          <div class="field" data-show="silhouette:binary">
+            <label class="flabel" for="silThreshold">Ambang gelap/terang<span class="help" tabindex="0" role="note" data-tip="Batas kecerahan antara hitam dan putih.&#10;Kecil: hanya bagian sangat gelap jadi hitam (siluet lebih tipis).&#10;Besar: abu-abu ikut jadi hitam (siluet lebih tebal)." aria-label="Batas kecerahan antara hitam dan putih.&#10;Kecil: hanya bagian sangat gelap jadi hitam (siluet lebih tipis).&#10;Besar: abu-abu ikut jadi hitam (siluet lebih tebal).">?</span> <output class="mono" for="silThreshold"></output></label>
+            <input type="range" id="silThreshold" data-opt="silThreshold" min="30" max="230" step="1">
+            <div class="scale mono"><span>siluet lebih tipis</span><span>lebih tebal</span></div>
+          </div>
+          <div class="field">
+            <div class="flabel">Upscale<span class="help" tabindex="0" role="note" data-tip="Gambar diperbesar dulu sebelum ditelusuri supaya batas warna jatuh di posisi sub-piksel.&#10;Besar (4×): tepi lebih presisi dan mulus, proses sedikit lebih lama." aria-label="Gambar diperbesar dulu sebelum ditelusuri supaya batas warna jatuh di posisi sub-piksel.&#10;Besar (4×): tepi lebih presisi dan mulus, proses sedikit lebih lama.">?</span> <em>sebelum tracing</em></div>
+            <div class="seg wide" data-opt="upscale">
+              <button type="button" data-v="1">1×</button>
+              <button type="button" data-v="2">2×</button>
+              <button type="button" data-v="3">3×</button>
+              <button type="button" data-v="4">4×</button>
+            </div>
+          </div>
+          <div class="field" data-show="color">
+            <div class="flabel">Jumlah warna maksimum<span class="help" tabindex="0" role="note" data-tip="Otomatis: jumlah warna ditentukan dari gambar.&#10;Batas: hasil dipaksa paling banyak sejumlah ini (warna mirip digabung)." aria-label="Otomatis: jumlah warna ditentukan dari gambar.&#10;Batas: hasil dipaksa paling banyak sejumlah ini (warna mirip digabung).">?</span></div>
+            <div class="row-inline">
+              <div class="seg" data-opt="colorAuto">
+                <button type="button" data-v="1">Otomatis</button>
+                <button type="button" data-v="0">Batas</button>
+              </div>
+              <input class="num mono" id="maxColors" type="number" min="2" max="64" step="1" value="12" aria-label="Jumlah warna maksimum">
+            </div>
+          </div>
+          <div class="field" data-show="color">
+            <label class="flabel" for="colorMerge">Kepekaan warna<span class="help" tabindex="0" role="note" data-tip="Seberapa beda dua warna agar dianggap warna tersendiri (ΔE).&#10;Kecil: lebih banyak nuansa dipisah, bentuk lebih banyak.&#10;Besar: warna mirip digabung, lebih sedikit warna &amp; lebih bersih.&#10;Putih tidak pernah digabung dengan warna lain." aria-label="Seberapa beda dua warna agar dianggap warna tersendiri (ΔE).&#10;Kecil: lebih banyak nuansa dipisah, bentuk lebih banyak.&#10;Besar: warna mirip digabung, lebih sedikit warna &amp; lebih bersih.&#10;Putih tidak pernah digabung dengan warna lain.">?</span> <output class="mono" for="colorMerge"></output></label>
+            <input type="range" id="colorMerge" data-opt="colorMerge" min="4" max="30" step="1">
+            <div class="scale mono"><span>banyak nuansa</span><span>sedikit warna</span></div>
+            <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="clean"><span><b>Rapikan</b><small>Bersihkan derau/tekstur, rapikan batas antar warna yang mirip, dan sederhanakan kurvanya. Outline dan detail kontras tetap tajam.</small></span></label>
+            <label class="check" style="margin-top:8px"><input type="checkbox" data-opt="lineStrokes"><span><b>Garis tipis → garis vektor</b><small>Untuk gambar kaya warna/tekstur (≥ 24 warna): garis tipis yang pecah ditambahkan sebagai stroke bertebal seragam.</small></span></label>
+          </div>
+          <div class="field" data-show="color">
+            <label class="flabel" for="rough">Haluskan tepi kasar<span class="help" tabindex="0" role="note" data-tip="Meratakan tepi bergerigi (gaya kuas kering, derau JPEG).&#10;Kecil / mati: tepi mengikuti gambar apa adanya.&#10;Besar: tepi lebih mulus; garis setipis ≤ 2 px bisa ikut menipis." aria-label="Meratakan tepi bergerigi (gaya kuas kering, derau JPEG).&#10;Kecil / mati: tepi mengikuti gambar apa adanya.&#10;Besar: tepi lebih mulus; garis setipis ≤ 2 px bisa ikut menipis.">?</span> <output class="mono" for="rough"></output></label>
+            <input type="range" id="rough" data-opt="rough" min="0" max="4" step="0.5">
+            <div class="scale mono"><span>mati (setia ke tepi)</span><span>tepi kuas → mulus</span></div>
+            <p class="note">Tepi bergerigi bergaya kuas kering dihaluskan. Turunkan bila ada garis setipis ≤ 2 px yang hilang.</p>
+            <label class="check" style="margin-top:10px"><input type="checkbox" data-opt="straighten"><span><b>Luruskan garis panjang</b><small>Tepi yang bergerigi tetapi bila ditarik garis panjang memang lurus dijadikan satu garis lurus. Lengkungan tetap lengkung.</small></span></label>
+          </div>
+          <div class="field" data-show="color">
+            <div class="flabel">Sederhanakan bayangan<span class="help" tabindex="0" role="note" data-tip="Melebur bercak warna yang batasnya lemah di gambar asli (bayangan lembut, gradasi berpita) ke warna tetangganya. Outline dan batas kontras tidak disentuh.&#10;Mati: semua tingkat bayangan dipertahankan.&#10;Ringan: bercak kecil dilebur — hasil lebih bersih.&#10;Kuat: bercak lebih besar ikut dilebur — paling sedikit bentuk, tetapi sebagian bayangan hilang." aria-label="Melebur bercak warna yang batasnya lemah di gambar asli (bayangan lembut, gradasi berpita) ke warna tetangganya. Outline dan batas kontras tidak disentuh.&#10;Mati: semua tingkat bayangan dipertahankan.&#10;Ringan: bercak kecil dilebur — hasil lebih bersih.&#10;Kuat: bercak lebih besar ikut dilebur — paling sedikit bentuk, tetapi sebagian bayangan hilang.">?</span></div>
+            <div class="seg wide" data-opt="simplify">
+              <button type="button" data-v="0">Mati</button>
+              <button type="button" data-v="1">Ringan</button>
+              <button type="button" data-v="2">Kuat</button>
+            </div>
+          </div>
+          <div class="field" data-show="color silhouette">
+            <label class="check"><input type="checkbox" data-opt="polyFit"><span><b>Kurva hemat titik</b><small>Mesin kurva baru: tepi dihitung sub-piksel dari gambar asli, lalu dibentuk poligon dengan sisi sesedikit mungkin dan dihaluskan (gaya Potrace). Titik lebih sedikit, sudut runcing tetap runcing.</small></span></label>
+          </div>
+          <div class="field">
+            <label class="flabel" for="smooth">Kehalusan kurva<span class="help" tabindex="0" role="note" data-tip="Toleransi saat piksel diubah menjadi kurva.&#10;Kecil (presisi): kurva menempel ketat ke tepi piksel; lebih banyak titik dan gelombang kecil bisa ikut terbawa.&#10;Besar (halus): kurva lebih mulus dengan lebih sedikit titik; detail kecil bisa sedikit membulat." aria-label="Toleransi saat piksel diubah menjadi kurva.&#10;Kecil (presisi): kurva menempel ketat ke tepi piksel; lebih banyak titik dan gelombang kecil bisa ikut terbawa.&#10;Besar (halus): kurva lebih mulus dengan lebih sedikit titik; detail kecil bisa sedikit membulat.">?</span> <output class="mono" for="smooth"></output></label>
+            <input type="range" id="smooth" data-opt="smooth" min="0.15" max="1.2" step="0.05">
+            <div class="scale mono"><span>presisi</span><span>halus</span></div>
+          </div>
+          <div class="field">
+            <label class="flabel" for="minArea">Buang bintik &lt;<span class="help" tabindex="0" role="note" data-tip="Bentuk yang lebih kecil dari luas ini dilebur ke warna di sekitarnya.&#10;Kecil: detail kecil (titik, bintang) dipertahankan.&#10;Besar: hasil lebih bersih, tetapi detail kecil bisa hilang." aria-label="Bentuk yang lebih kecil dari luas ini dilebur ke warna di sekitarnya.&#10;Kecil: detail kecil (titik, bintang) dipertahankan.&#10;Besar: hasil lebih bersih, tetapi detail kecil bisa hilang.">?</span> <output class="mono" for="minArea"></output></label>
+            <input type="range" id="minArea" data-opt="minArea" min="0" max="80" step="1">
+          </div>
+          <div class="field">
+            <label class="flabel" for="corner">Sudut tajam ≥<span class="help" tabindex="0" role="note" data-tip="Belokan yang lebih tajam dari sudut ini dibuat runcing; yang lebih landai dibuat melengkung.&#10;Kecil: lebih banyak sudut runcing (tampak kaku/bersegi).&#10;Besar: lebih banyak belokan membulat." aria-label="Belokan yang lebih tajam dari sudut ini dibuat runcing; yang lebih landai dibuat melengkung.&#10;Kecil: lebih banyak sudut runcing (tampak kaku/bersegi).&#10;Besar: lebih banyak belokan membulat.">?</span> <output class="mono" for="corner"></output></label>
+            <input type="range" id="corner" data-opt="corner" min="35" max="110" step="1">
+            <div class="scale mono"><span>lebih banyak sudut</span><span>lebih membulat</span></div>
+          </div>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">03</span> Latar</h3>
+          <div class="field">
+            <div class="flabel">Warna latar gambar<span class="help" tabindex="0" role="note" data-tip="Warna latar yang dibuang menjadi transparan.&#10;Tanpa: semua warna divectorisasi.&#10;Putih: latar putih dibuang.&#10;Magenta: latar #FF00FF dibuang (disarankan, putih tetap aman)." aria-label="Warna latar yang dibuang menjadi transparan.&#10;Tanpa: semua warna divectorisasi.&#10;Putih: latar putih dibuang.&#10;Magenta: latar #FF00FF dibuang (disarankan, putih tetap aman).">?</span></div>
+            <div class="seg wide" data-opt="bgKey">
+              <button type="button" data-v="none">Tanpa</button>
+              <button type="button" data-v="white">Putih</button>
+              <button type="button" data-v="magenta"><i class="dot-mg" aria-hidden="true"></i>Magenta</button>
+            </div>
+            <p class="note" data-bg="none">Tidak ada warna yang dihapus — semua warna, termasuk putih dan magenta, ikut divectorisasi. Klik bentuk di pratinjau bila ingin menghapus bagian tertentu.</p>
+          </div>
+          <div class="field" data-bg="magenta">
+            <label class="flabel" for="keyTol">Toleransi magenta<span class="help" tabindex="0" role="note" data-tip="Seberapa jauh dari magenta murni yang masih dianggap latar.&#10;Kecil: hanya magenta murni.&#10;Besar: ungu/pink di dekatnya ikut dibuang — hati-hati bila objek berwarna ungu/pink." aria-label="Seberapa jauh dari magenta murni yang masih dianggap latar.&#10;Kecil: hanya magenta murni.&#10;Besar: ungu/pink di dekatnya ikut dibuang — hati-hati bila objek berwarna ungu/pink.">?</span> <output class="mono" for="keyTol"></output></label>
+            <input type="range" id="keyTol" data-opt="keyTol" min="0" max="50" step="1">
+            <div class="scale mono"><span>hanya magenta murni</span><span>ungu/pink ikut</span></div>
+            <p class="note">Semua warna sedekat ini dengan magenta menjadi transparan. Putih di mana pun tetap putih.</p>
+          </div>
+          <div class="field" data-show="silhouette" data-bg="white">
+            <div class="flabel">Rongga di dalam siluet<span class="help" tabindex="0" role="note" data-tip="Luar: hanya putih di luar objek yang dibuang.&#10;Pintar: menebak putih terkurung yang termasuk latar.&#10;Semua: semua putih dibuang.&#10;Isi: rongga diisi warna siluet." aria-label="Luar: hanya putih di luar objek yang dibuang.&#10;Pintar: menebak putih terkurung yang termasuk latar.&#10;Semua: semua putih dibuang.&#10;Isi: rongga diisi warna siluet.">?</span></div>
+            <div class="seg wide" data-opt="cavity">
+              <button type="button" data-v="white">Luar</button>
+              <button type="button" data-v="smart">Pintar</button>
+              <button type="button" data-v="transparent">Semua</button>
+              <button type="button" data-v="fill">Isi</button>
+            </div>
+            <p class="note" id="cavityNote"></p>
+          </div>
+          <div class="field" data-show="color gradient" data-bg="white">
+            <div class="flabel">Putih yang dijadikan transparan<span class="help" tabindex="0" role="note" data-tip="Tidak: putih dipertahankan.&#10;Luar: hanya putih yang tersambung ke tepi gambar.&#10;AI / Pintar: juga menebak putih di dalam yang termasuk latar.&#10;Semua: semua putih." aria-label="Tidak: putih dipertahankan.&#10;Luar: hanya putih yang tersambung ke tepi gambar.&#10;AI / Pintar: juga menebak putih di dalam yang termasuk latar.&#10;Semua: semua putih.">?</span></div>
+            <div class="seg wide" data-opt="whiteMode">
+              <button type="button" data-v="off">Tidak</button>
+              <button type="button" data-v="outer">Luar</button>
+              <button type="button" data-v="ai">AI</button>
+              <button type="button" data-v="smart">Pintar</button>
+              <button type="button" data-v="all">Semua</button>
+            </div>
+            <p class="note" id="whiteNote"></p>
+          </div>
+          <div class="field" data-show="color gradient silhouette:gray" data-bg="white">
+            <label class="flabel" for="whiteTol">Toleransi putih<span class="help" tabindex="0" role="note" data-tip="Seberapa mendekati putih yang masih dianggap putih (ΔE).&#10;Kecil: hanya putih bersih.&#10;Besar: abu-abu/krem sangat terang ikut dianggap putih." aria-label="Seberapa mendekati putih yang masih dianggap putih (ΔE).&#10;Kecil: hanya putih bersih.&#10;Besar: abu-abu/krem sangat terang ikut dianggap putih.">?</span> <output class="mono" for="whiteTol"></output></label>
+            <input type="range" id="whiteTol" data-opt="whiteTol" min="2" max="30" step="1">
+          </div>
+          <div class="learn">
+            <label class="check"><input type="checkbox" data-opt="learn"><span><b>Belajar dari hasil akhir saya</b><small>Keadaan akhir tiap area putih dicatat saat Anda mengunduh (klik coba-coba tidak dihitung). Gambar berikutnya dengan gaya serupa otomatis mengikuti. Tersimpan hanya di browser ini.</small></span></label>
+            <div class="learn-row"><span class="mono" id="learnStat"></span><button type="button" class="btn ghost small" id="forgetBtn">Lupakan</button></div>
+          </div>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">04</span> Ukuran output <span class="badge">Standar microstock</span></h3>
+          <div class="chips" data-opt="size">
+            <button type="button" data-v="15">15 MP <small>Minimal</small></button>
+            <button type="button" data-v="20">20 MP <small>HD</small></button>
+            <button type="button" data-v="25">25 MP <small>Adobe Stock</small></button>
+            <button type="button" data-v="30">30 MP <small>Ultra</small></button>
+            <button type="button" data-v="custom">Kustom <small>≥15 MP</small></button>
+            <button type="button" data-v="orig">Asli</button>
+          </div>
+          <div class="field" id="customField" hidden>
+            <label class="flabel" for="customMP">Megapiksel kustom<span class="help" tabindex="0" role="note" data-tip="Ukuran artboard hasil dalam megapiksel (minimal 15 MP untuk microstock)." aria-label="Ukuran artboard hasil dalam megapiksel (minimal 15 MP untuk microstock).">?</span></label>
+            <input class="num mono" id="customMP" type="number" min="15" max="100" step="0.5" value="15">
+          </div>
+          <p class="readout mono" id="sizeReadout">—</p>
+          <p class="note">Artboard dan koordinat kurva diskalakan, jadi hasilnya tetap tajam di ukuran berapa pun.</p>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">05</span> Struktur</h3>
+          <div class="field">
+            <div class="flabel">Susunan bentuk<span class="help" tabindex="0" role="note" data-tip="Tumpuk: bentuk ditumpuk dari belakang ke depan — tanpa retak, mudah diedit.&#10;Potong: bentuk saling memotong tanpa tumpang tindih — untuk cutting plotter/sablon." aria-label="Tumpuk: bentuk ditumpuk dari belakang ke depan — tanpa retak, mudah diedit.&#10;Potong: bentuk saling memotong tanpa tumpang tindih — untuk cutting plotter/sablon.">?</span></div>
+            <div class="seg wide" data-opt="stacking">
+              <button type="button" data-v="stacked">Tumpuk</button>
+              <button type="button" data-v="cutout">Potong</button>
+            </div>
+            <p class="note" id="stackNote"></p>
+          </div>
+          <label class="check"><input type="checkbox" data-opt="gapFill"><span><b>Pengisi celah</b><small>Garis tipis sewarna di bawah bentuk agar sambungan tidak tampak retak.</small></span></label>
+        </section>
+
+        <section class="group">
+          <h3><span class="n mono">06</span> Format unduhan</h3>
+          <div class="formats" role="radiogroup">
+            <label class="fmt"><input type="radio" name="format" value="both"><span class="ficon">ZIP</span><span><b>SVG + EPS</b><small>Folder <code>SVG/</code> dan <code>EPS/</code></small></span><em>Lengkap</em></label>
+            <label class="fmt"><input type="radio" name="format" value="svg"><span class="ficon">SVG</span><span><b>Hanya SVG</b><small>Format web</small></span></label>
+            <label class="fmt"><input type="radio" name="format" value="eps"><span class="ficon">EPS</span><span><b>Hanya EPS</b><small>EPS 10 · Illustrator / CorelDRAW</small></span></label>
+          </div>
+        </section>
+      </div>
+
+      <div class="panel-foot">
+        <div class="pstatus mono" id="pstatus">Belum ada gambar.</div>
+        <button class="btn dark" id="downloadBtn" type="button" disabled>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13h10" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+          <span>Unduh semua (.zip)</span>
+        </button>
+      </div>
+    </aside>
+  </main>
+
+  <div class="dropveil" id="dropveil" hidden><div>Lepaskan untuk menambahkan</div></div>
+  <input type="color" id="colorPick" hidden>
+
+  <script type="module" src="gate.js?v=202611191100"></script>
+</body>
+</html>

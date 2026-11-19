@@ -1,0 +1,115 @@
+# Vektor — batch vectorizer di browser (repo 020: alur proses baru)
+
+Ubah gambar raster (PNG/JPG/WEBP) menjadi **SVG** dan **EPS 10** sekaligus banyak file.
+Semua proses berjalan di browser (Web Worker); tidak ada file yang diunggah ke server,
+jadi bisa di-host gratis di GitHub Pages.
+
+## Fitur
+
+- **Batch**: seret banyak gambar sekaligus (atau tempel dari clipboard). Diproses paralel.
+- **Mode Warna, Siluet, atau Gradien**
+  - *Warna*: palet otomatis (atau dibatasi), cocok untuk ilustrasi flat. **Rapikan** (bawaan aktif, mendekati cara vectorizer.ai): grain/derau JPEG diratakan tanpa menyentuh tepi; dua warna mirip tetap dipisah bila memang dua bidang datar (ada "lembah" di histogram, mis. butir nasi putih di atas nasi) dan dilebur bila hanya derau/peralihan; warna "antara" yang bedanya sangat tipis (dE ≤ 8) dari tetangganya — mis. pita tipis di antara dua warna kerak yang mirip — dianggap sama dan dilebur utuh ke tetangga terdekat, sedangkan detail yang lebih gelap/terang dari sekitarnya (bayangan selai, butir nasi, kilau) tetap ada; bercak yang warnanya beda tipis (dE ≤ 12) dan batasnya di gambar asli sebagian besar lembut (kilau samar, belang cahaya) juga dilebur, sedangkan detail bertepi tegas (butir nasi) tetap; bintik dan pinggiran antialias dibuang; batas antar warna mirip dihaluskan lebih kuat (lebih sedikit titik). Pada gambar kaya warna (≥ 24 warna) garis tipis ditambahkan sebagai stroke rata. **Haluskan tepi kasar** (bawaan 2 px, 0–4): tepi bergerigi bergaya kuas kering beserta bercak warna di sepanjang tepinya dihaluskan menjadi kurva mulus; sudut yang tegas tetap tajam. Turunkan bila ada garis setipis ≤ 2 px yang hilang. **Luruskan garis panjang** (bawaan aktif): tepi yang bergerigi tetapi bila ditarik garis panjang (≥ 18 px) memang lurus dijadikan satu garis lurus — simpangan boleh hingga 2,5 % panjangnya (maks. 2 px) asal tersebar di kedua sisi; busur dan lengkung-S tetap lengkung.
+  - *Gradien*: untuk gambar penuh gradasi/cahaya (ilustrasi digital, adegan malam). Palet besar (bawaan 64 warna, 16–128) tanpa peleburan agresif; pita peralihan tipis di tepi garis dipindahkan ke sisi yang benar dan batas antar tingkat warna dirapikan (filter mayoritas), sehingga outline tidak berhalo. **Garis tipis → garis vektor** (bawaan aktif): garis ≤ ~3 px (outline gelap hingga ~3,6 px) dikenali, dihapus dari isian, lalu digambar ulang sebagai stroke bertebal seragam (potongan yang searah disambung, warna garis yang mirip diseragamkan; outline gelap yang warnanya tergeser latar disamakan dengan warna outline utama). Sambungan garis dikenali dari ujungnya: ujung-ujung yang bertemu (puncak, sudut) disatukan di satu titik, ujung yang menembus garis lain dipotong tepat di sumbunya, arah garis diteruskan untuk menyambung ke garis lain (sambungan-T) atau ke ujung pasangannya bila garis putus — hanya bila piksel aslinya di celah itu memang segelap garis; garis yang berbalik arah di persimpangan dipecah, tajinya dibuang. Bidang landai (langit, cahaya bulan/matahari) dihaluskan isotropik berjangkauan jauh sehingga pita warna berkontur bulat & mulus, bukan kotak bergerigi; tepi dan garis tidak tersentuh. **Cahaya bulat → cincin** (bawaan aktif): bulan, matahari, atau lampu bulat dideteksi — juga yang tertutup sebagian (mis. setengah di balik gunung) — dengan mencocokkan lingkaran ke kontur luarnya (RANSAC). Warna & kekuatan cahayanya diukur per jarak dari pusat, cahaya dikeluarkan dari langit (langit di belakangnya menjadi pita warna biasa), lalu dipasang kembali sebagai lingkaran sepusat bertumpuk yang makin luar makin transparan, hanya di bentuk langit (gunung, awan, dan garis tidak ikut terwarnai). Di EPS (tanpa transparansi) lingkarannya diisi warna campuran per bentuk langit. **Lingkaran & busur sempurna** (bawaan aktif): tepi yang hampir lingkaran/busur dijadikan lingkaran/busur sempurna (dibatalkan bila menyimpang dari tepi aslinya); matikan bila bentuk bulatnya memang tidak sempurna. Bawaan warna latar mode Gradien: *Tanpa*.
+  - *Siluet*: untuk stensil, emblem, siluet. Nada **Hitam + abu-abu** (tingkat abu-abu dipertahankan dengan rona aslinya) atau **Hitam saja** (ambang gelap/terang bisa diatur). Dengan latar putih, rongga di dalam siluet bisa **Luar**, **Pintar**, **Semua** (transparan), atau **Isi**.
+- **Upscale sebelum tracing** (default 4×) agar batas warna jatuh di posisi sub-piksel.
+- **Warna latar: Tanpa / Putih / Magenta**. *Tanpa*: tidak ada warna yang dihapus — semua warna (termasuk putih dan magenta) divectorisasi. Bawaan per mode: mode **Warna** memakai latar *Magenta* dan *Kepekaan warna* ΔE 17; mode Siluet dan Gradien memakai latar *Putih* dan ΔE 10. Saat ganti mode, pengaturan yang masih bernilai bawaan ikut berganti; yang sudah Anda ubah dibiarkan.
+- **Latar magenta (disarankan)**: buat gambar dengan latar #FF00FF, pilih *Warna latar: Magenta*. Semua warna dalam toleransi (0–50 %, bawaan 30 %) dari magenta menjadi transparan; putih di mana pun tetap putih. Pinggiran keunguan akibat antialias/JPEG dibersihkan otomatis. Berlaku untuk mode Warna dan Siluet.
+- **Latar putih → transparan**
+  - *Luar*: hanya putih yang tersambung ke tepi gambar (dengan penutup celah garis, jadi tidak bocor ke dalam objek).
+  - *Luar* (bawaan): hanya putih yang tersambung ke tepi; putih di dalam ditandai garis putus-putus untuk diklik.
+  - *AI*: putih luar + putih di dalam yang dinilai latar oleh model ISNet ilustrasi (44 MB, diunduh sekali, ±10 detik/gambar, khusus mode Warna). Lihat `THIRD_PARTY.md`.
+  - *Pintar* (eksperimental): putih luar + putih terkurung yang termasuk latar (antara kaki, rangka kursi, dsb.). Putih milik objek tetap.
+  - *Semua*: semua area putih.
+  - Klik bentuk mana pun di pratinjau untuk menghapus/mengembalikannya, **langsung tanpa proses ulang** (bentuk disorot saat kursor di atasnya). Urungkan/ulangi: Ctrl+Z / Ctrl+Shift+Z.
+- **Alat sunting** (bilah palet, langsung tanpa proses ulang, bisa diurungkan):
+  - *Hapus* (H): hapus/kembalikan bentuk.
+  - *Gabung* (G): lebur bentuk ke tetangga dengan batas bersama terpanjang (ditandai garis putus-putus biru saat kursor di atasnya). Bentuk yang terkurung sepenuhnya oleh tetangganya tidak lagi digambar (mode Tumpuk), jadi file lebih ringkas.
+  - *Warnai* (W): beri satu bentuk warna sendiri; Alt+klik bentuk atau klik warna palet untuk mengambil warna.
+  - *Gabung warna*: dalam mode Gabung, klik satu warna palet lalu warna tujuan — semua bentuk berwarna itu memakai warna tujuan.
+  - Suntingan disimpan sebagai titik, jadi tetap berlaku setelah gambar diproses ulang.
+- **Belajar dari hasil akhir**: saat mengunduh, keadaan akhir tiap area putih (dihapus/tidak) dicatat bersama sidiknya (ukuran, kontak garis/latar, objek di seberang garis, bentuk). Gambar berikutnya dengan gaya serupa otomatis mengikuti (k-tetangga terdekat; koreksi Anda berbobot lebih). Klik coba-coba tidak dihitung. Tersimpan di browser ini saja; bisa dihapus dengan tombol *Lupakan*.
+- **Tombol Proses**: unggah dan ubah pengaturan tidak langsung memproses; klik *Proses* setelah selesai mengatur.
+- **Alur proses (Mengubah jadi vektor)**: saat *Proses* berjalan, pratinjau menampilkan gambar asli dengan garis pemindai dan kartu checklist empat langkah — *Menyiapkan gambar* → *Membaca warna* → *Menelusuri tepi bentuk* → *Merapikan dan menyusun berkas*. Langkah mengikuti kemajuan nyata mesin (bukan animasi palsu). Tombol **Batalkan proses** menghentikan gambar yang sedang dikerjakan (worker dihentikan dan disiapkan ulang; antrean lain lanjut). Setelah selesai tampil status **Vektor siap · N bentuk · ukuran berkas** (ukuran SVG sebenarnya sesuai pengaturan unduh).
+- **Ukuran output microstock**: 15 / 20 / 25 / 30 MP, kustom (≥15 MP), atau asli. Artboard dan koordinat kurva diskalakan.
+- **Kode nama file**: `[kode]_[urutan]_[nama_awal]`, mis. `011_1_600_01_stencil_voids_emblem.svg`.
+- **Format unduhan**: SVG + EPS (`SVG/` dan `EPS/` dalam satu ZIP), hanya SVG, atau hanya EPS.
+- **Palet per gambar**: ganti warna atau jadikan transparan.
+- **Tema terang/gelap**: tombol di kanan atas (otomatis → terang → gelap), tersimpan di browser.
+- **Sembunyikan panel pengaturan**: tombol panel di kanan atas (atau tombol **P**) menyembunyikan/menampilkan sidebar kanan agar area gambar selebar layar; pilihan tersimpan di browser.
+- **Pratinjau hasil di antrean**: setelah berhasil diproses, tiap baris antrean menampilkan gambar kecil hasil vektornya (ikut berubah saat diedit).
+- **Kata sandi**: aplikasi baru bisa dipakai setelah kata sandi benar, diminta setiap kali laman dibuka. Kata sandi tidak disimpan di kode; yang disimpan hanya hash bertingkat (SHA-512 bergaram → PBKDF2-HMAC-SHA-512 600.000 putaran bergaram → SHA-256) di `gate.js`. Salah memasukkan menambah jeda (1, 2, 4 … maks. 30 dtk). Mengganti kata sandi: jalankan skrip pembuat hash lalu ganti konstanta `S1`, `S2`, `HASH` di `gate.js`.
+- **Bantuan (?)**: arahkan kursor ke ikon tanda tanya di samping pengaturan untuk penjelasan nilai kecil vs besar.
+- **Default**: tombol di atas panel mengembalikan semua pengaturan ke nilai bawaan (kode nama file dan nomor mulai tidak diubah).
+- **Kode nama file** ada di urutan pertama panel agar tidak lupa diganti.
+- **Penampil**: Bandingkan (geser pembatas), **Berdampingan** (keduanya tanpa penanda oranye agar hasil terlihat apa adanya) (asli kiri, vektor kanan; zoom dan geser bersamaan, tanda silang menunjukkan titik yang sama di panel seberang; tombol **S**), Vektor, Garis (outline), zoom, 1:1, lensa piksel, latar pratinjau gelap/terang (tombol atau tombol keyboard **B**; hanya tampilan, tidak memproses ulang).
+- **Susunan**: Tumpuk (bentuk bersarang tanpa retak) atau Potong (tanpa tumpang tindih), plus pengisi celah: tiap bentuk mendapat garis sewarna yang meluas ke bawah bentuk yang digambar sesudahnya, jadi tidak ada retakan saat dilihat diperkecil dan tidak ada bentuk yang menebal.
+
+- **Kurva hemat titik** (bawaan aktif, mode Warna & Siluet): tepi dihitung sub-piksel dari gambar asli (titik 50 % antara dua warna / alpha 50 %), lalu tiap batas dijadikan poligon dengan sisi sesedikit mungkin (pemrograman dinamis, gaya Potrace), titik sudutnya digeser ke perpotongan garis kuadrat-terkecil, belokan tajam menjadi sudut runcing dan sisanya kurva halus; kurva searah digabung selama simpangannya kecil. Bentuk bulat tanpa sudut menjadi elips utuh. Pada 11 gambar uji: 10–25 % lebih sedikit titik dan tepi lebih akurat di 8 dari 11.
+
+- **Sederhanakan bayangan** (mode Warna: Mati / Ringan / Kuat, bawaan Mati): bercak warna yang batasnya lemah di gambar asli (bayangan lembut, gradasi berpita) dilebur ke tetangganya; outline dan batas kontras tidak disentuh. Ruang kerja (Ringan): 5.047 → 3.982 bentuk, 23.997 → 18.573 titik, dengan sebagian nuansa bayangan hilang.
+
+## Uji kualitas (tools/)
+
+`tools/bench.cjs` + `tools/bench.html` mengukur tiap gambar uji: selisih warna hasil vs asli (seluruh gambar dan di tepi), jumlah bentuk & titik, serta kerataan kurva (belokan dan titik balik per 100 px). Taruh gambar di `test-images/`, sajikan folder ini (`python3 -m http.server 8767`), lalu `node tools/bench.cjs 8767 hasil.json`.
+
+## Cara kerja tracing
+
+1. **Penghalusan searah garis**: arah tiap tepi dihitung (tensor struktur), lalu warna dirata-ratakan sepanjang garis — getaran tepi akibat kompresi hilang tanpa menipiskan garis.
+2. **Palet** dibangun dari piksel "rata". Piksel transisi/antialias diabaikan, lalu varian minor (mis. tepi garis yang lebih gelap karena kompresi) dilebur.
+3. **Upscale** dengan interpolasi halus.
+4. **Benih + region growing**: piksel yang jelas cocok dengan palet dan tidak berada di lereng gradien menjadi benih. Piksel transisi diberikan ke warna tetangga terdekat, sehingga batas jatuh di titik 50%.
+5. **Garis ala siluet** (mode warna): batas antara warna garis (palet paling gelap) dan isian terang di sebelahnya ditentukan oleh ambang kecerahan di titik tengah keduanya — tepi garis rata dan tebalnya konsisten, warna tetap.
+6. **Pembersihan**: bintik kecil dilebur ke tetangga yang warnanya paling mirip.
+7. **Tracing pada kisi sudut piksel**: batas antar dua region dipecah menjadi rantai di titik pertemuan ≥3 region. Tiap rantai di-fit **sekali** dan dipakai kedua sisinya, jadi tidak ada celah atau tumpang tindih.
+8. **Fitting**: deteksi sudut, garis lurus, Bézier kubik (Schneider), dan elips utuh.
+
+## Menjalankan lokal
+
+Tidak perlu build. Cukup sajikan folder ini dengan server statis apa pun:
+
+```sh
+python3 -m http.server 8000
+# buka http://localhost:8000/
+```
+
+(Membuka `index.html` langsung via `file://` tidak bisa karena Web Worker dan ES module.)
+
+## Versi file (cache)
+
+`index.html` dan `app.js` memuat file lain dengan `?v=<versi>` agar browser tidak memakai
+JavaScript lama dari cache GitHub Pages. Saat mengubah file, perbarui angka versinya
+(cari `?v=`) di `index.html` dan `app.js`.
+
+## Deploy ke GitHub Pages
+
+1. Repo → **Settings → Pages**.
+2. *Source*: **Deploy from a branch**. Pilih branch ini, folder **/ (root)**, lalu **Save**.
+3. Situs akan aktif di `https://<user>.github.io/<nama-repo>/`.
+
+## Branch dan perbedaannya
+
+Semua branch berasal dari satu riwayat, jadi tiap branch cadangan adalah gambaran kondisi aplikasi
+pada satu titik. Untuk kembali ke versi tertentu, ambil branch-nya (`git checkout backupN`) atau
+pilih branch itu di *Settings → Pages* untuk dideploy.
+
+| Branch | Commit | Kondisi |
+| --- | --- | --- |
+| `backup1` | `a9061ea` | **Sebelum mesin kurva baru.** Tema terang/gelap, tombol bantuan (?), tombol Default, dan perbaikan sedotan sudah ada. Kurva memakai fitting lama; belum ada alat sunting, pengisi celah di pratinjau, maupun verifikasi bentuk. |
+| `backup2` | `e5256f2` | **Mode Warna disempurnakan, sebelum mode Gradien diperbaiki.** Menambah mesin kurva sub-piksel gaya Potrace, alat sunting (Hapus, Gabung, Warnai) tanpa proses ulang, pengisi celah (garis putih di sambungan hilang), peleburan warna yang hampir sama, tombol sembunyikan panel (tombol P), pratinjau hasil di antrean, serta bawaan mode Warna latar Magenta dan ΔE 17. Mode Gradien masih versi lama dan latar bawaannya Putih. |
+| `backup3` | `06411dc` | **Mode Gradien diperbaiki.** Menambah gerbang kata sandi, latar bawaan mode Gradien *Tanpa*, cahaya bulan/matahari berupa cincin sepusat yang meredup, lingkaran dan busur sempurna, deteksi outline gelap lebih tebal (garis gunung tidak hilang), serta sambungan garis yang rapi. Mode Warna dan Siluet sama dengan `backup2`. |
+| `claude/lucid-allen-esni3r` | terbaru | **Branch kerja.** Selalu berisi kondisi paling baru; saat ini sama dengan `backup3` dan akan berubah seiring pekerjaan berikutnya. |
+
+Catatan: `backup1`–`backup3` tidak ikut berubah setelah dibuat. Perubahan baru hanya masuk ke branch kerja.
+
+## Struktur
+
+| File | Isi |
+| --- | --- |
+| `index.html` | Markup antarmuka |
+| `styles.css` | Gaya (terang/gelap otomatis) |
+| `app.js` | Antrean, worker pool, penampil, panel pengaturan, unduhan |
+| `worker.js` | Mesin tracing (palet, upscale, label, tracing, fitting) |
+| `export.js` | Penyusun SVG/EPS dan penulis ZIP (tanpa dependensi) |
+| `ai-worker.js` | Penilai objek/latar AI (onnxruntime-web + model di `models/`) |
+
+Browser yang didukung: Chrome/Edge 103+, Firefox 113+, Safari 16.4+.
